@@ -37,7 +37,7 @@ where
         status: MessageStatus,
     ) -> Result<Vec<Entity>, OutboxError> {
         let query = AssertSqlSafe(format!(
-            "SELECT * FROM {} WHERE status = $1 LIMIT {}",
+            "SELECT * FROM {} WHERE status = $1 ORDER BY created_at ASC, id ASC LIMIT {}",
             Entity::name(),
             limit
         ));
@@ -99,15 +99,15 @@ mod tests {
     use std::str::FromStr;
 
     use dtor::dtor;
-    use futures::future::join_all;
     use outbox_core::model::{Identifiable, MessageStatus};
     use outbox_core::repository::Repository;
     use serde_json::json;
+    use sqlx::Row;
     use sqlx::types::JsonValue;
     use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
     use testcontainers::{ContainerAsync, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres;
-    use time::OffsetDateTime;
+    use time::{Duration, OffsetDateTime};
     use tokio::sync::OnceCell;
     use uuid::Uuid;
 
@@ -207,7 +207,20 @@ mod tests {
         }
     }
 
-    async fn create_message(pool: &PgPool, subject: &'static str, status: MessageStatus) -> Uuid {
+    async fn truncate_table(pool: &PgPool) {
+        sqlx::query("TRUNCATE TABLE outbox_message")
+            .execute(pool)
+            .await
+            .expect("Failed to truncate outbox_message table");
+    }
+
+    async fn create_message(
+        pool: &PgPool,
+        subject: &'static str,
+        status: MessageStatus,
+        now: Option<OffsetDateTime>,
+        published_at: Option<OffsetDateTime>,
+    ) -> Uuid {
         let subject = format!("some.event.prefix.{}", subject);
         let message_id = Uuid::now_v7();
         let aggregate_id = Uuid::now_v7();
@@ -216,8 +229,8 @@ mod tests {
             "name": "test"
         });
 
-        let now = OffsetDateTime::now_utc();
-        let published_at: Option<OffsetDateTime> = None;
+        let now = now.unwrap_or(OffsetDateTime::now_utc());
+        let published_at: Option<OffsetDateTime> = published_at.or(None);
 
         let db_id: String = sqlx::query_scalar(
             r#"
@@ -243,15 +256,24 @@ mod tests {
         Uuid::from_str(&db_id).unwrap()
     }
 
-    async fn get_all_messages_by_status(
+    async fn get_all_messages_by_status_and_ids(
         pool: &PgPool,
         status: MessageStatus,
+        ids: Vec<Uuid>,
     ) -> Vec<OutboxMessage> {
-        sqlx::query_as(r"SELECT * FROM outbox_message WHERE status = $1")
-            .bind(status.to_string())
-            .fetch_all(pool)
-            .await
-            .unwrap()
+        let ids: Vec<String> = ids.into_iter().map(|x| x.to_string()).collect();
+        sqlx::query_as(
+            r"
+            SELECT * FROM outbox_message 
+            WHERE status = $1 
+            AND id = ANY($2)
+            ",
+        )
+        .bind(status.to_string())
+        .bind(&ids)
+        .fetch_all(pool)
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -266,14 +288,21 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_pending() {
         let pool = get_pool().await;
-        let pending_message_ids: Vec<Uuid> = join_all(
-            (0..=10).map(|_| create_message(pool, "test-subject", MessageStatus::PENDING)),
-        )
-        .await;
+        truncate_table(pool).await;
+        let mut pending_message_ids: Vec<Uuid> = Vec::with_capacity(11);
+        for _ in 0..=10 {
+            let id = create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            pending_message_ids.push(id);
+        }
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
         let limit = 10;
         let pending_messages = repo.fetch_pending(limit).await.unwrap();
-        let all_pending_messages = get_all_messages_by_status(pool, MessageStatus::PENDING).await;
+        let all_pending_messages = get_all_messages_by_status_and_ids(
+            pool,
+            MessageStatus::PENDING,
+            pending_message_ids.clone(),
+        )
+        .await;
         assert_eq!(pending_messages.len(), limit as usize);
         assert_eq!(all_pending_messages.len(), 11);
 
@@ -285,18 +314,75 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_failed() {
         let pool = get_pool().await;
-        let failed_message_ids: Vec<Uuid> =
-            join_all((0..=10).map(|_| create_message(pool, "test-subject", MessageStatus::FAILED)))
-                .await;
+        truncate_table(pool).await;
+        let mut failed_message_ids: Vec<Uuid> = Vec::with_capacity(11);
+        for _ in 0..=10 {
+            let id = create_message(pool, "test-subject", MessageStatus::FAILED, None, None).await;
+            failed_message_ids.push(id);
+        }
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
         let limit = 10;
         let failed_messages = repo.fetch_failed(limit).await.unwrap();
-        let all_failed_messages = get_all_messages_by_status(pool, MessageStatus::FAILED).await;
+        let all_failed_messages = get_all_messages_by_status_and_ids(
+            pool,
+            MessageStatus::FAILED,
+            failed_message_ids.clone(),
+        )
+        .await;
         assert_eq!(failed_messages.len(), limit as usize);
         assert_eq!(all_failed_messages.len(), 11);
 
         for (idx, message) in failed_messages.iter().enumerate() {
             assert_eq!(message.id, failed_message_ids[idx]);
         }
+    }
+
+    #[tokio::test]
+    async fn test_clean_up() {
+        let pool = get_pool().await;
+        truncate_table(pool).await;
+
+        let mut pending_message_ids: Vec<Uuid> = Vec::with_capacity(10);
+        for _ in 0..=9 {
+            let id = create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            pending_message_ids.push(id);
+        }
+        let two_days = Duration::days(2);
+        let two_days_ago = OffsetDateTime::now_utc() - two_days;
+
+        let mut published_message_ids: Vec<Uuid> = Vec::with_capacity(4);
+        for _ in 0..=3 {
+            let id = create_message(
+                pool,
+                "test-subject",
+                MessageStatus::PUBLISHED,
+                Some(two_days_ago),
+                Some(two_days_ago),
+            )
+            .await;
+            published_message_ids.push(id);
+        }
+        let all_ids: Vec<String> = [published_message_ids, pending_message_ids]
+            .concat()
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect();
+        let count = sqlx::query("SELECT COUNT(id) FROM outbox_message WHERE id = ANY($1::TEXT[])")
+            .bind(all_ids.clone())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let count: i64 = count.get(0);
+        assert_eq!(count, 14);
+        let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
+        repo.clean_up(1).await.unwrap();
+
+        let count = sqlx::query("SELECT COUNT(id) FROM outbox_message WHERE id = ANY($1::TEXT[])")
+            .bind(all_ids)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let count: i64 = count.get(0);
+        assert_eq!(count, 10);
     }
 }
