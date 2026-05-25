@@ -16,5 +16,7 @@ where
     /// - `message` The outbox message to be sent
     async fn publish(&self, message: E) -> Result<(), OutboxError>;
 
+    /// Shutsdown the publisher's connection to the message infrastructure and
+    /// performs cleanup
     async fn shutdown(&self);
 }

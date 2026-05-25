@@ -17,8 +17,10 @@ where
     /// The status of the outbox message
     fn status(&self) -> MessageStatus;
 
+    /// The subject or topic of the message
     fn subject(&self) -> &str;
 
+    /// The payload sent to be sent
     fn payload(&self) -> &JsonValue;
 
     /// The name of the outbox message schema

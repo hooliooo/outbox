@@ -5,6 +5,7 @@ use std::hash::Hash;
 
 use async_trait::async_trait;
 
+use crate::model::MessageStatus;
 use crate::{error::OutboxError, model::Message};
 
 /// Reads and updates the outbox messages from the persistence layer
@@ -12,7 +13,7 @@ use crate::{error::OutboxError, model::Message};
 pub trait Repository<OutboxMessage, Identifier>: Send + Sync
 where
     OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display,
+    Identifier: Eq + Hash + PartialEq + Display + Clone,
 {
     /// Fetches outbox messages with a status of
     /// ['MessageStatus::PENDING`](crate::model::MessageStatus)
@@ -31,4 +32,15 @@ where
     /// # Arguments
     /// - `retention_in_days` The number of days published outbox messages from be retained
     async fn clean_up(&self, retention_in_days: u32) -> Result<(), OutboxError>;
+
+    /// Updates the status of the outbox message
+    /// # Arguments
+    /// - `id` The identifier of the message
+    /// - `status` The updated status of the message
+    async fn update_status(
+        &self,
+        id: Identifier,
+        status: MessageStatus,
+        last_error: Option<String>,
+    ) -> Result<(), OutboxError>;
 }

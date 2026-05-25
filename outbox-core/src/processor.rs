@@ -9,11 +9,11 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 use futures::StreamExt;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::config::OutboxConfig;
 use crate::error::OutboxError;
-use crate::model::Message;
+use crate::model::{Message, MessageStatus};
 use crate::publisher::Publisher;
 use crate::repository::Repository;
 
@@ -41,7 +41,7 @@ impl<State, R, OutboxMessage, Identifier, P> Processor<State, R, OutboxMessage, 
 where
     R: Repository<OutboxMessage, Identifier>,
     OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display,
+    Identifier: Eq + Hash + PartialEq + Display + Clone,
     P: Publisher<OutboxMessage>,
 {
     /// Creates a Processor
@@ -58,10 +58,32 @@ where
         let count = self.config.publisher_batch_size as usize;
         futures::stream::iter(messages)
             .for_each_concurrent(count, |message| async move {
+                let id = message.id().clone();
                 match self.publisher.publish(message).await {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        debug!("Message successfully published");
+                        let result = self
+                            .repository
+                            .update_status(id, MessageStatus::PUBLISHED, None)
+                            .await;
+
+                        match result {
+                            Ok(_) => debug!("Message status updated to PUBLISHED"),
+                            Err(err) => error!("Message status not updated: {:?}", err),
+                        }
+                    }
                     Err(err) => {
                         error!("Failed to publish message {:?}", err);
+
+                        let result = self
+                            .repository
+                            .update_status(id, MessageStatus::FAILED, Some(err.to_string()))
+                            .await;
+
+                        match result {
+                            Ok(_) => debug!("Message status updated to FAILED"),
+                            Err(err) => error!("Message status not updated: {:?}", err),
+                        }
                     }
                 }
             })
@@ -73,7 +95,7 @@ impl<R, OutboxMessage, Identifier, P> Processor<Pending, R, OutboxMessage, Ident
 where
     R: Repository<OutboxMessage, Identifier>,
     OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display,
+    Identifier: Eq + Hash + PartialEq + Display + Clone,
     P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of pending events.
@@ -98,7 +120,7 @@ impl<R, OutboxMessage, Identifier, P> Processor<Failed, R, OutboxMessage, Identi
 where
     R: Repository<OutboxMessage, Identifier>,
     OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display,
+    Identifier: Eq + Hash + PartialEq + Display + Clone,
     P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of failed events.
@@ -123,7 +145,7 @@ impl<R, OutboxMessage, Identifier, P> Processor<CleanUp, R, OutboxMessage, Ident
 where
     R: Repository<OutboxMessage, Identifier>,
     OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display,
+    Identifier: Eq + Hash + PartialEq + Display + Clone,
     P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of events that have reached the retention period.

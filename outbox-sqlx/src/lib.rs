@@ -6,6 +6,7 @@ use sqlx::{AssertSqlSafe, PgPool};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
+use time::OffsetDateTime;
 
 /// A sqlx implemenation of the [`Repository`](outbox_core::repository::Repository)
 pub struct SqlxRespository<Msg, Identifier> {
@@ -65,7 +66,7 @@ where
         + Unpin
         + Send
         + Sync,
-    Identifier: Eq + Hash + PartialEq + Display + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
 {
     async fn fetch_pending(&self, limit: u32) -> Result<Vec<Msg>, OutboxError> {
         self.fetch_messages_by_status(limit, MessageStatus::PENDING)
@@ -92,6 +93,37 @@ where
         ));
         sqlx::query(query)
             .bind(retention_in_days as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn update_status(
+        &self,
+        id: Identifier,
+        status: MessageStatus,
+        last_error: Option<String>,
+    ) -> Result<(), OutboxError> {
+        let query = AssertSqlSafe(format!(
+            "
+            UPDATE {}
+            SET status = $1, published_at = $2, last_error = $3
+            WHERE id = $4
+            ",
+            Msg::name()
+        ));
+
+        let published_at: Option<OffsetDateTime> = match status {
+            MessageStatus::PENDING | MessageStatus::FAILED => None,
+            MessageStatus::PUBLISHED => Some(OffsetDateTime::now_utc()),
+        };
+
+        sqlx::query(query)
+            .bind(status.to_string())
+            .bind(published_at)
+            .bind(last_error)
+            .bind(id.to_string())
             .execute(&self.pool)
             .await
             .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
@@ -405,5 +437,63 @@ mod tests {
             .unwrap();
         let count: i64 = count.get(0);
         assert_eq!(count, 10);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_update_status() {
+        let pool = get_pool().await;
+        truncate_table(pool).await;
+        let query = "SELECT * FROM outbox_message WHERE id = $1";
+        let id = create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+
+        let message: OutboxMessage = sqlx::query_as(query)
+            .bind(id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        assert!(message.published_at.is_none());
+
+        let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
+
+        repo.update_status(id, MessageStatus::PUBLISHED, None)
+            .await
+            .unwrap();
+
+        let message: OutboxMessage = sqlx::query_as(query)
+            .bind(id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        assert!(message.published_at.is_some());
+        assert!(message.last_error.is_none());
+
+        repo.update_status(id, MessageStatus::FAILED, Some("test error".to_owned()))
+            .await
+            .unwrap();
+
+        let message: OutboxMessage = sqlx::query_as(query)
+            .bind(id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        assert!(message.published_at.is_none());
+        assert_eq!(message.last_error.unwrap(), "test error".to_owned());
+
+        repo.update_status(id, MessageStatus::PENDING, None)
+            .await
+            .unwrap();
+
+        let message: OutboxMessage = sqlx::query_as(query)
+            .bind(id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        assert!(message.published_at.is_none());
+        assert!(message.last_error.is_none());
     }
 }

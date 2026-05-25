@@ -26,7 +26,7 @@ impl<R, Msg, Identifier> NATSPublisher<R, Msg, Identifier>
 where
     R: Repository<Msg, Identifier>,
     Msg: Clone + Debug + Message<Identifier> + Send + Sync,
-    Identifier: Eq + Hash + PartialEq + Display + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
 {
     pub async fn new(
         nats_url: String,
@@ -97,7 +97,7 @@ impl<R, Msg, Identifier> Publisher<Msg> for NATSPublisher<R, Msg, Identifier>
 where
     R: Repository<Msg, Identifier>,
     Msg: Clone + Debug + Message<Identifier> + Send + Sync,
-    Identifier: Eq + Hash + PartialEq + Display + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
 {
     async fn publish(&self, message: Msg) -> Result<(), OutboxError> {
         self.publish_and_await_ack(message).await?;
