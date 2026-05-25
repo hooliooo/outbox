@@ -37,12 +37,12 @@ pub struct Failed;
 /// messages that have reached their retention limit
 pub struct CleanUp;
 
-impl<State, R, Entity, Id, P> Processor<State, R, Entity, Id, P>
+impl<State, R, OutboxMessage, Identifier, P> Processor<State, R, OutboxMessage, Identifier, P>
 where
-    R: Repository<Entity>,
-    Entity: Clone + Debug + Identifiable<Id>,
-    Id: Eq + Hash + PartialEq,
-    P: Publisher<Entity>,
+    R: Repository<OutboxMessage, Identifier>,
+    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
+    Identifier: Eq + Hash + PartialEq,
+    P: Publisher<OutboxMessage>,
 {
     /// Creates a Processor
     pub fn new(config: OutboxConfig, repository: R, publisher: P) -> Self {
@@ -54,7 +54,7 @@ where
         }
     }
 
-    async fn publish_messages(&self, messages: Vec<Entity>) {
+    async fn publish_messages(&self, messages: Vec<OutboxMessage>) {
         let count = self.config.publisher_batch_size as usize;
         futures::stream::iter(messages)
             .for_each_concurrent(count, |message| async move {
@@ -69,12 +69,12 @@ where
     }
 }
 
-impl<R, Entity, Id, P> Processor<Pending, R, Entity, Id, P>
+impl<R, OutboxMessage, Identifier, P> Processor<Pending, R, OutboxMessage, Identifier, P>
 where
-    R: Repository<Entity>,
-    Entity: Clone + Debug + Identifiable<Id>,
-    Id: Eq + Hash + PartialEq,
-    P: Publisher<Entity>,
+    R: Repository<OutboxMessage, Identifier>,
+    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
+    Identifier: Eq + Hash + PartialEq,
+    P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of pending events.
     ///
@@ -94,12 +94,12 @@ where
     }
 }
 
-impl<R, Entity, Id, P> Processor<Failed, R, Entity, Id, P>
+impl<R, OutboxMessage, Identifier, P> Processor<Failed, R, OutboxMessage, Identifier, P>
 where
-    R: Repository<Entity>,
-    Entity: Clone + Debug + Identifiable<Id>,
-    Id: Eq + Hash + PartialEq,
-    P: Publisher<Entity>,
+    R: Repository<OutboxMessage, Identifier>,
+    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
+    Identifier: Eq + Hash + PartialEq,
+    P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of failed events.
     ///
@@ -119,12 +119,12 @@ where
     }
 }
 
-impl<R, Entity, Id, P> Processor<CleanUp, R, Entity, Id, P>
+impl<R, OutboxMessage, Identifier, P> Processor<CleanUp, R, OutboxMessage, Identifier, P>
 where
-    R: Repository<Entity>,
-    Entity: Clone + Debug + Identifiable<Id>,
-    Id: Eq + Hash + PartialEq,
-    P: Publisher<Entity>,
+    R: Repository<OutboxMessage, Identifier>,
+    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
+    Identifier: Eq + Hash + PartialEq,
+    P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of events that have reached the retention period.
     ///

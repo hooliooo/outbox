@@ -6,7 +6,7 @@ readme = "README.md"
 
 [workspace]
 resolver = "3"
-members = ["outbox-core", "outbox-sqlx"]
+members = ["outbox-core", "outbox-nats", "outbox-sqlx"]
 
 [workspace.dependencies]
 async-trait = { version = "0.1.89" }

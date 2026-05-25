@@ -8,21 +8,21 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 /// A sqlx implemenation of the [`Repository`](outbox_core::repository::Repository)
-pub struct SqlxRespository<Entity, Id> {
+pub struct SqlxRespository<Message, Identifier> {
     pool: PgPool,
-    _marker: PhantomData<(Entity, Id)>,
+    _marker: PhantomData<(Message, Identifier)>,
 }
 
-impl<Entity, Id> SqlxRespository<Entity, Id>
+impl<Message, Identifier> SqlxRespository<Message, Identifier>
 where
-    Entity: Clone
+    Message: Clone
         + Debug
-        + Identifiable<Id>
+        + Identifiable<Identifier>
         + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
         + Unpin
         + Send
         + Sync,
-    Id: Eq + Hash + PartialEq + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Send + Sync,
 {
     pub fn new(pool: PgPool) -> Self {
         Self {
@@ -35,13 +35,13 @@ where
         &self,
         limit: u32,
         status: MessageStatus,
-    ) -> Result<Vec<Entity>, OutboxError> {
+    ) -> Result<Vec<Message>, OutboxError> {
         let query = AssertSqlSafe(format!(
             "SELECT * FROM {} WHERE status = $1 ORDER BY created_at ASC, id ASC LIMIT {}",
-            Entity::name(),
+            Message::name(),
             limit
         ));
-        let results: Vec<Entity> = sqlx::query_as(query)
+        let results: Vec<Message> = sqlx::query_as(query)
             .bind(status.to_string())
             .fetch_all(&self.pool)
             .await
@@ -51,23 +51,23 @@ where
 }
 
 #[async_trait]
-impl<Entity, Id> Repository<Entity> for SqlxRespository<Entity, Id>
+impl<Message, Identifier> Repository<Message, Identifier> for SqlxRespository<Message, Identifier>
 where
-    Entity: Clone
+    Message: Clone
         + Debug
-        + Identifiable<Id>
+        + Identifiable<Identifier>
         + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
         + Unpin
         + Send
         + Sync,
-    Id: Eq + Hash + PartialEq + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Send + Sync,
 {
-    async fn fetch_pending(&self, limit: u32) -> Result<Vec<Entity>, OutboxError> {
+    async fn fetch_pending(&self, limit: u32) -> Result<Vec<Message>, OutboxError> {
         self.fetch_messages_by_status(limit, MessageStatus::PENDING)
             .await
     }
 
-    async fn fetch_failed(&self, limit: u32) -> Result<Vec<Entity>, OutboxError> {
+    async fn fetch_failed(&self, limit: u32) -> Result<Vec<Message>, OutboxError> {
         self.fetch_messages_by_status(limit, MessageStatus::FAILED)
             .await
     }
@@ -82,8 +82,8 @@ where
                 AND created_at < now() - (INTERVAL '1 day' * $1)
                 LIMIT 1000
             )",
-            Entity::name(),
-            Entity::name(),
+            Message::name(),
+            Message::name(),
         ));
         sqlx::query(query)
             .bind(retention_in_days as i64)
@@ -249,7 +249,7 @@ mod tests {
         .bind(now)
         .bind(published_at)
         .bind(0i64)
-        .fetch_one(pool)
+        .execute(pool)
         .await
         .unwrap();
         message_id
