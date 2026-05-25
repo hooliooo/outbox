@@ -24,6 +24,7 @@ where
         + Sync,
     Identifier: Eq + Hash + PartialEq + Send + Sync,
 {
+    /// Creates a new instance of the SqlxRespository
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
@@ -31,13 +32,17 @@ where
         }
     }
 
+    /// Fetches messages by status and limit
+    /// # Arguments
+    /// - `limit` The maximum number of messages to be fetched
+    /// - `status` The status of the messages to be queried
     async fn fetch_messages_by_status(
         &self,
         limit: u32,
         status: MessageStatus,
     ) -> Result<Vec<Message>, OutboxError> {
         let query = AssertSqlSafe(format!(
-            "SELECT * FROM {} WHERE status = $1 ORDER BY created_at ASC, id ASC LIMIT {}",
+            "SELECT * FROM {} WHERE status = $1 LIMIT {}",
             Message::name(),
             limit
         ));

@@ -3,23 +3,32 @@ use std::{
     hash::Hash,
 };
 
+/// The trait the outbox message entity must adopt to integrate with the
+/// [`Repository`](crate::repository::Repository) properly
 pub trait Identifiable<Id>
 where
     Id: Eq + Hash + PartialEq,
 {
+    /// The identifier of the outbox message
     fn id(&self) -> &Id;
 
+    /// The status of the outbox message
     fn status(&self) -> MessageStatus;
 
+    /// The name of the outbox message schema
     fn name() -> &'static str;
 }
 
+/// The possible statuses of an outbox message
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[cfg_attr(feature = "sqlx", sqlx(rename_all = "UPPERCASE"))]
 pub enum MessageStatus {
+    /// The outbox message is waiting to be published
     PENDING,
+    /// The outbox message has been published
     PUBLISHED,
+    /// The outbox message was not published due to a failure
     FAILED,
 }
 
