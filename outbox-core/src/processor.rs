@@ -4,7 +4,7 @@
 //! based on the result of attempt.
 //!
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
@@ -13,7 +13,7 @@ use tracing::error;
 
 use crate::config::OutboxConfig;
 use crate::error::OutboxError;
-use crate::model::Identifiable;
+use crate::model::Message;
 use crate::publisher::Publisher;
 use crate::repository::Repository;
 
@@ -40,8 +40,8 @@ pub struct CleanUp;
 impl<State, R, OutboxMessage, Identifier, P> Processor<State, R, OutboxMessage, Identifier, P>
 where
     R: Repository<OutboxMessage, Identifier>,
-    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
-    Identifier: Eq + Hash + PartialEq,
+    OutboxMessage: Clone + Debug + Message<Identifier>,
+    Identifier: Eq + Hash + PartialEq + Display,
     P: Publisher<OutboxMessage>,
 {
     /// Creates a Processor
@@ -72,8 +72,8 @@ where
 impl<R, OutboxMessage, Identifier, P> Processor<Pending, R, OutboxMessage, Identifier, P>
 where
     R: Repository<OutboxMessage, Identifier>,
-    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
-    Identifier: Eq + Hash + PartialEq,
+    OutboxMessage: Clone + Debug + Message<Identifier>,
+    Identifier: Eq + Hash + PartialEq + Display,
     P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of pending events.
@@ -97,8 +97,8 @@ where
 impl<R, OutboxMessage, Identifier, P> Processor<Failed, R, OutboxMessage, Identifier, P>
 where
     R: Repository<OutboxMessage, Identifier>,
-    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
-    Identifier: Eq + Hash + PartialEq,
+    OutboxMessage: Clone + Debug + Message<Identifier>,
+    Identifier: Eq + Hash + PartialEq + Display,
     P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of failed events.
@@ -122,8 +122,8 @@ where
 impl<R, OutboxMessage, Identifier, P> Processor<CleanUp, R, OutboxMessage, Identifier, P>
 where
     R: Repository<OutboxMessage, Identifier>,
-    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
-    Identifier: Eq + Hash + PartialEq,
+    OutboxMessage: Clone + Debug + Message<Identifier>,
+    Identifier: Eq + Hash + PartialEq + Display,
     P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of events that have reached the retention period.

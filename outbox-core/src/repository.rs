@@ -1,18 +1,18 @@
 //! A [`Repository`] is the abstraction over the persistence layer used to store and read
 //! outbox messages.
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
 
 use async_trait::async_trait;
 
-use crate::{error::OutboxError, model::Identifiable};
+use crate::{error::OutboxError, model::Message};
 
 /// Reads and updates the outbox messages from the persistence layer
 #[async_trait]
 pub trait Repository<OutboxMessage, Identifier>: Send + Sync
 where
-    OutboxMessage: Clone + Debug + Identifiable<Identifier>,
-    Identifier: Eq + Hash + PartialEq,
+    OutboxMessage: Clone + Debug + Message<Identifier>,
+    Identifier: Eq + Hash + PartialEq + Display,
 {
     /// Fetches outbox messages with a status of
     /// ['MessageStatus::PENDING`](crate::model::MessageStatus)

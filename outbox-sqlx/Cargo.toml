@@ -5,8 +5,8 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-async-trait.workspace = true
 outbox-core = { path = "../outbox-core", features = ["sqlx"] }
+async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

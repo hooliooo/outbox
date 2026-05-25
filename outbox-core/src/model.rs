@@ -3,17 +3,23 @@ use std::{
     hash::Hash,
 };
 
+use sqlx::types::JsonValue;
+
 /// The trait the outbox message entity must adopt to integrate with the
 /// [`Repository`](crate::repository::Repository) properly
-pub trait Identifiable<Id>
+pub trait Message<Id>
 where
-    Id: Eq + Hash + PartialEq,
+    Id: Eq + Hash + PartialEq + Display,
 {
     /// The identifier of the outbox message
     fn id(&self) -> &Id;
 
     /// The status of the outbox message
     fn status(&self) -> MessageStatus;
+
+    fn subject(&self) -> &str;
+
+    fn payload(&self) -> &JsonValue;
 
     /// The name of the outbox message schema
     fn name() -> &'static str;

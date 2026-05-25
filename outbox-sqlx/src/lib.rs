@@ -1,28 +1,28 @@
 use async_trait::async_trait;
 use outbox_core::error::OutboxError;
 use outbox_core::model::MessageStatus;
-use outbox_core::{model::Identifiable, repository::Repository};
+use outbox_core::{model::Message, repository::Repository};
 use sqlx::{AssertSqlSafe, PgPool};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
 /// A sqlx implemenation of the [`Repository`](outbox_core::repository::Repository)
-pub struct SqlxRespository<Message, Identifier> {
+pub struct SqlxRespository<Msg, Identifier> {
     pool: PgPool,
-    _marker: PhantomData<(Message, Identifier)>,
+    _marker: PhantomData<(Msg, Identifier)>,
 }
 
-impl<Message, Identifier> SqlxRespository<Message, Identifier>
+impl<Msg, Identifier> SqlxRespository<Msg, Identifier>
 where
-    Message: Clone
+    Msg: Clone
         + Debug
-        + Identifiable<Identifier>
+        + Message<Identifier>
         + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
         + Unpin
         + Send
         + Sync,
-    Identifier: Eq + Hash + PartialEq + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Send + Sync,
 {
     /// Creates a new instance of the SqlxRespository
     pub fn new(pool: PgPool) -> Self {
@@ -40,13 +40,13 @@ where
         &self,
         limit: u32,
         status: MessageStatus,
-    ) -> Result<Vec<Message>, OutboxError> {
+    ) -> Result<Vec<Msg>, OutboxError> {
         let query = AssertSqlSafe(format!(
             "SELECT * FROM {} WHERE status = $1 LIMIT {}",
-            Message::name(),
+            Msg::name(),
             limit
         ));
-        let results: Vec<Message> = sqlx::query_as(query)
+        let results: Vec<Msg> = sqlx::query_as(query)
             .bind(status.to_string())
             .fetch_all(&self.pool)
             .await
@@ -56,23 +56,23 @@ where
 }
 
 #[async_trait]
-impl<Message, Identifier> Repository<Message, Identifier> for SqlxRespository<Message, Identifier>
+impl<Msg, Identifier> Repository<Msg, Identifier> for SqlxRespository<Msg, Identifier>
 where
-    Message: Clone
+    Msg: Clone
         + Debug
-        + Identifiable<Identifier>
+        + Message<Identifier>
         + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
         + Unpin
         + Send
         + Sync,
-    Identifier: Eq + Hash + PartialEq + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Send + Sync,
 {
-    async fn fetch_pending(&self, limit: u32) -> Result<Vec<Message>, OutboxError> {
+    async fn fetch_pending(&self, limit: u32) -> Result<Vec<Msg>, OutboxError> {
         self.fetch_messages_by_status(limit, MessageStatus::PENDING)
             .await
     }
 
-    async fn fetch_failed(&self, limit: u32) -> Result<Vec<Message>, OutboxError> {
+    async fn fetch_failed(&self, limit: u32) -> Result<Vec<Msg>, OutboxError> {
         self.fetch_messages_by_status(limit, MessageStatus::FAILED)
             .await
     }
@@ -87,8 +87,8 @@ where
                 AND created_at < now() - (INTERVAL '1 day' * $1)
                 LIMIT 1000
             )",
-            Message::name(),
-            Message::name(),
+            Msg::name(),
+            Msg::name(),
         ));
         sqlx::query(query)
             .bind(retention_in_days as i64)
@@ -103,7 +103,7 @@ where
 mod tests {
 
     use dtor::dtor;
-    use outbox_core::model::{Identifiable, MessageStatus};
+    use outbox_core::model::{Message, MessageStatus};
     use outbox_core::repository::Repository;
     use serde_json::json;
     use serial_test::serial;
@@ -198,13 +198,21 @@ mod tests {
         pub last_error: Option<String>,
     }
 
-    impl Identifiable<Uuid> for OutboxMessage {
+    impl Message<Uuid> for OutboxMessage {
         fn id(&self) -> &Uuid {
             &self.id
         }
 
         fn status(&self) -> MessageStatus {
             self.status.clone()
+        }
+
+        fn subject(&self) -> &str {
+            &self.subject
+        }
+
+        fn payload(&self) -> &JsonValue {
+            &self.payload
         }
 
         fn name() -> &'static str {
