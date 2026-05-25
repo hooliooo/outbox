@@ -96,12 +96,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
 
     use dtor::dtor;
     use outbox_core::model::{Identifiable, MessageStatus};
     use outbox_core::repository::Repository;
     use serde_json::json;
+    use serial_test::serial;
     use sqlx::Row;
     use sqlx::types::JsonValue;
     use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
@@ -232,13 +232,12 @@ mod tests {
         let now = now.unwrap_or(OffsetDateTime::now_utc());
         let published_at: Option<OffsetDateTime> = published_at.or(None);
 
-        let db_id: String = sqlx::query_scalar(
+        sqlx::query(
             r#"
             INSERT INTO outbox_message
             (id, aggregate_id, aggregate_name, subject, payload, status, created_at, published_at, retry_count)
             VALUES 
             ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            RETURNING id
             "#,
         )
         .bind(message_id.to_string())
@@ -253,7 +252,7 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        Uuid::from_str(&db_id).unwrap()
+        message_id
     }
 
     async fn get_all_messages_by_status_and_ids(
@@ -277,6 +276,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_database_setup() {
         let pool = get_pool().await;
 
@@ -286,6 +286,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_fetch_pending() {
         let pool = get_pool().await;
         truncate_table(pool).await;
@@ -312,6 +313,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_fetch_failed() {
         let pool = get_pool().await;
         truncate_table(pool).await;
@@ -338,6 +340,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_clean_up() {
         let pool = get_pool().await;
         truncate_table(pool).await;
@@ -367,7 +370,12 @@ mod tests {
             .into_iter()
             .map(|x| x.to_string())
             .collect();
-        let count = sqlx::query("SELECT COUNT(id) FROM outbox_message WHERE id = ANY($1::TEXT[])")
+        let sql_query = r#"
+            SELECT COUNT(id) 
+            FROM outbox_message 
+            WHERE id = ANY($1::TEXT[])
+            "#;
+        let count = sqlx::query(sql_query)
             .bind(all_ids.clone())
             .fetch_one(pool)
             .await
@@ -377,7 +385,7 @@ mod tests {
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
         repo.clean_up(1).await.unwrap();
 
-        let count = sqlx::query("SELECT COUNT(id) FROM outbox_message WHERE id = ANY($1::TEXT[])")
+        let count = sqlx::query(sql_query)
             .bind(all_ids)
             .fetch_one(pool)
             .await
