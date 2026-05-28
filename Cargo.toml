@@ -6,10 +6,10 @@ readme = "README.md"
 
 [workspace]
 resolver = "3"
-members = ["outbox-core", "outbox-nats", "outbox-sqlx"]
+members = ["outbox"]
 
 [workspace.dependencies]
-async-nats = { version = "0.48.0", features = ["websockets"] }
+async-nats = { version = "0.49.0", features = ["websockets"] }
 async-trait = { version = "0.1.89" }
 base64 = { version = "0.22.1" }
 bytes = "1.11.1"

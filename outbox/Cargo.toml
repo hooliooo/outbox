@@ -1,0 +1,31 @@
+[package]
+name = "outbox"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[features]
+nats = ["dep:async-nats", "dep:base64", "dep:bytes", "dep:serde_json", "dep:tokio"]
+sqlx = ["dep:serde", "dep:serde_json","dep:sqlx", "dep:time", "dep:tokio", "dep:uuid"]
+
+[dependencies]
+async-nats = { workspace = true, optional = true }
+async-trait.workspace = true
+base64 = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+futures.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+thiserror.workspace = true
+time = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tracing.workspace = true
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+dtor.workspace = true
+serial_test.workspace = true
+testcontainers.workspace = true
+testcontainers-modules.workspace = true
+tokio.workspace = true

@@ -1,15 +1,13 @@
 use std::{fmt::Display, hash::Hash, marker::PhantomData, time::Duration};
 
+use crate::{error::OutboxError, model::Message, publisher::Publisher, repository::Repository};
 use async_nats::{
     Client, HeaderMap,
-    jetstream::{self, Context},
+    jetstream::{self, Context, context::PublishAckFuture, publish::PublishAck},
 };
 use async_trait::async_trait;
 use base64::{Engine, prelude::BASE64_STANDARD};
 use bytes::Bytes;
-use outbox_core::{
-    error::OutboxError, model::Message, publisher::Publisher, repository::Repository,
-};
 use std::fmt::Debug;
 use tracing::{debug, error};
 
@@ -79,13 +77,12 @@ where
         let json_bytes = serde_json::to_vec(message.payload()).unwrap();
         let bytes = Bytes::from(json_bytes);
 
-        let ack_future = self
+        let ack_future: PublishAckFuture = self
             .jetstream
             .publish_with_headers(message.subject().to_string(), headers, bytes)
             .await
             .map_err(|e| OutboxError::PublisherError(e.kind().to_string()))?;
-
-        tokio::time::timeout(self.ack_timeout, ack_future)
+        let _ack: PublishAck = tokio::time::timeout(self.ack_timeout, ack_future)
             .await
             .map_err(|_| OutboxError::PublisherError("Acknowledgment took too long".into()))?
             .map_err(|e| OutboxError::PublisherError(e.kind().to_string()))?;

@@ -1,12 +1,18 @@
+use std::{
+    fmt::{Debug, Display},
+    hash::Hash,
+    marker::PhantomData,
+};
+
 use async_trait::async_trait;
-use outbox_core::error::OutboxError;
-use outbox_core::model::MessageStatus;
-use outbox_core::{model::Message, repository::Repository};
 use sqlx::{AssertSqlSafe, PgPool};
-use std::fmt::{Debug, Display};
-use std::hash::Hash;
-use std::marker::PhantomData;
 use time::OffsetDateTime;
+
+use crate::{
+    error::OutboxError,
+    model::{Message, MessageStatus},
+    repository::Repository,
+};
 
 /// A sqlx implemenation of the [`Repository`](outbox_core::repository::Repository)
 pub struct SqlxRespository<Msg, Identifier> {
@@ -134,9 +140,9 @@ where
 #[cfg(test)]
 mod tests {
 
+    use crate::model::{Message, MessageStatus};
+    use crate::repository::Repository;
     use dtor::dtor;
-    use outbox_core::model::{Message, MessageStatus};
-    use outbox_core::repository::Repository;
     use serde_json::json;
     use serial_test::serial;
     use sqlx::Row;
@@ -148,7 +154,7 @@ mod tests {
     use tokio::sync::OnceCell;
     use uuid::Uuid;
 
-    use crate::SqlxRespository;
+    use crate::sqlx::SqlxRespository;
 
     static CONTAINER: OnceCell<ContainerAsync<Postgres>> = OnceCell::const_new();
     static POOL: OnceCell<PgPool> = OnceCell::const_new();
