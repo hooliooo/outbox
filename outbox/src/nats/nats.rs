@@ -1,6 +1,6 @@
 use std::{fmt::Display, hash::Hash, marker::PhantomData, time::Duration};
 
-use crate::{error::OutboxError, model::Message, publisher::Publisher, repository::Repository};
+use crate::{error::OutboxError, model::Message, publisher::Publisher};
 use async_nats::{
     Client, HeaderMap,
     jetstream::{self, Context, context::PublishAckFuture, publish::PublishAck},
@@ -12,17 +12,17 @@ use std::fmt::Debug;
 use tracing::{debug, error};
 
 const MESSAGE_ID: &str = "Nats-Msg-Id";
+const ACK_TOOK_TOO_LONG: &str = "Acknowledgment took too long";
 
-pub struct NATSPublisher<R, Msg, Identifier> {
+pub struct NATSPublisher<Msg, Identifier> {
     client: Client,
     jetstream: Context,
     ack_timeout: Duration,
-    _marker: PhantomData<(R, Msg, Identifier)>,
+    _marker: PhantomData<(Msg, Identifier)>,
 }
 
-impl<R, Msg, Identifier> NATSPublisher<R, Msg, Identifier>
+impl<Msg, Identifier> NATSPublisher<Msg, Identifier>
 where
-    R: Repository<Msg, Identifier>,
     Msg: Clone + Debug + Message<Identifier> + Send + Sync,
     Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
 {
@@ -84,15 +84,14 @@ where
             .map_err(|e| OutboxError::PublisherError(e.kind().to_string()))?;
         let _ack: PublishAck = tokio::time::timeout(self.ack_timeout, ack_future)
             .await
-            .map_err(|_| OutboxError::PublisherError("Acknowledgment took too long".into()))?
+            .map_err(|_| OutboxError::PublisherError(ACK_TOOK_TOO_LONG.into()))?
             .map_err(|e| OutboxError::PublisherError(e.kind().to_string()))?;
         Ok(())
     }
 }
 #[async_trait]
-impl<R, Msg, Identifier> Publisher<Msg> for NATSPublisher<R, Msg, Identifier>
+impl<Msg, Identifier> Publisher<Msg> for NATSPublisher<Msg, Identifier>
 where
-    R: Repository<Msg, Identifier>,
     Msg: Clone + Debug + Message<Identifier> + Send + Sync,
     Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
 {
@@ -110,5 +109,187 @@ where
                 error!("NATS Shutdown Error: {}", error.to_string())
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "nats"))]
+mod tests {
+    use std::{assert_matches, time::Duration};
+
+    use dtor::dtor;
+    use testcontainers::{
+        ContainerAsync, GenericImage, ImageExt,
+        core::{ContainerPort, WaitFor},
+        runners::AsyncRunner,
+    };
+    use tokio::sync::OnceCell;
+    use uuid::Uuid;
+
+    use crate::{
+        error::OutboxError,
+        model::{Message, MessageStatus},
+        nats::{ACK_TOOK_TOO_LONG, NATSPublisher},
+        publisher::Publisher,
+    };
+
+    #[derive(Clone, Eq, Hash, PartialEq, Debug)]
+    struct TestMessage {
+        id: Uuid,
+        status: MessageStatus,
+        subject: String,
+        payload: serde_json::Value,
+    }
+
+    impl Message<Uuid> for TestMessage {
+        fn id(&self) -> &Uuid {
+            &self.id
+        }
+
+        fn status(&self) -> crate::model::MessageStatus {
+            self.status.clone()
+        }
+
+        fn subject(&self) -> &str {
+            &self.subject
+        }
+
+        fn payload(&self) -> &serde_json::Value {
+            &self.payload
+        }
+
+        fn name() -> &'static str {
+            "test_message"
+        }
+    }
+
+    struct NATSEnvironment {
+        nats_port: u16,
+        _nats: ContainerAsync<GenericImage>,
+    }
+
+    static NATS_CONTAINER: OnceCell<NATSEnvironment> = OnceCell::const_new();
+
+    async fn nats_env() -> &'static NATSEnvironment {
+        NATS_CONTAINER
+            .get_or_init(|| async {
+                let nats = GenericImage::new("nats", "latest")
+                    .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+                    .with_mapped_port(4222, ContainerPort::Tcp(4222))
+                    .with_mapped_port(8222, ContainerPort::Tcp(8222))
+                    .with_cmd(["-js", "-sd", "/data", "-m", "8222"])
+                    .start()
+                    .await
+                    .expect("Could not start NATS container");
+                let nats_port = nats.get_host_port_ipv4(4222).await.unwrap();
+                NATSEnvironment {
+                    nats_port,
+                    _nats: nats,
+                }
+            })
+            .await
+    }
+
+    #[dtor(unsafe)]
+    fn clean_up() {
+        if let Some(env) = NATS_CONTAINER.get() {
+            let id = env._nats.id();
+            std::process::Command::new("docker")
+                .args(["container", "rm", "-f", id])
+                .output()
+                .expect("failed to stop testcontainer");
+        }
+    }
+
+    #[tokio::test]
+    async fn test() {
+        let env = nats_env().await;
+        let url = format!("nats://localhost:{}", env.nats_port);
+        let nats_client = async_nats::connect(&url).await.unwrap();
+        let jetstream = async_nats::jetstream::new(nats_client);
+        let publisher: NATSPublisher<TestMessage, Uuid> =
+            NATSPublisher::new(url.clone(), "".into(), Duration::from_secs(10))
+                .await
+                .unwrap();
+
+        let stream_name = "test-pending-publish";
+        let subject = "com.test.pending.domain-events.created";
+
+        let _ = jetstream.delete_stream(stream_name).await;
+
+        jetstream
+            .create_stream(async_nats::jetstream::stream::Config {
+                name: stream_name.to_string(),
+                subjects: vec![subject.to_string()],
+                max_messages: 2,
+                discard: async_nats::jetstream::stream::DiscardPolicy::New,
+                ..Default::default()
+            })
+            .await
+            .expect("Failed to create stream");
+
+        let message = TestMessage {
+            id: Uuid::now_v7(),
+            status: MessageStatus::PENDING,
+            subject: subject.to_string(),
+            payload: serde_json::json!({
+                "id": "test",
+                "aggregate_type": "user"
+            }),
+        };
+        publisher.publish(message).await.unwrap();
+
+        let mut stream = jetstream.get_stream(stream_name).await.unwrap();
+        let last_sequence = stream.info().await.unwrap().state.last_sequence;
+        assert!(
+            last_sequence >= 1,
+            "At least one message should be in the stream"
+        );
+
+        let message = TestMessage {
+            id: Uuid::now_v7(),
+            status: MessageStatus::PENDING,
+            subject: subject.to_string(),
+            payload: serde_json::json!({
+                "id": "test2",
+                "aggregate_type": "user"
+            }),
+        };
+        publisher.publish(message).await.unwrap();
+        let last_sequence = stream.info().await.unwrap().state.last_sequence;
+
+        assert!(
+            last_sequence >= 2,
+            "At least two message should be in the stream"
+        );
+
+        let message = TestMessage {
+            id: Uuid::now_v7(),
+            status: MessageStatus::PENDING,
+            subject: subject.to_string(),
+            payload: serde_json::json!({
+                "id": "test3",
+                "aggregate_type": "user"
+            }),
+        };
+        let result = publisher.publish(message).await;
+        assert_matches!(result.unwrap_err(), OutboxError::PublisherError(_));
+
+        let message = TestMessage {
+            id: Uuid::now_v7(),
+            status: MessageStatus::PENDING,
+            subject: subject.to_string(),
+            payload: serde_json::json!({
+                "id": "test4",
+                "aggregate_type": "user"
+            }),
+        };
+
+        let induce_ack_fail_publisher: NATSPublisher<TestMessage, Uuid> =
+            NATSPublisher::new(url.clone(), "".into(), Duration::from_nanos(1))
+                .await
+                .unwrap();
+
+        let result = induce_ack_fail_publisher.publish(message).await;
+        assert_matches!(result.unwrap_err(), OutboxError::PublisherError(error) if error == ACK_TOOK_TOO_LONG);
     }
 }

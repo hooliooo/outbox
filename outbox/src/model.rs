@@ -3,8 +3,6 @@ use std::{
     hash::Hash,
 };
 
-use sqlx::types::JsonValue;
-
 /// The trait the outbox message entity must adopt to integrate with the
 /// [`Repository`](crate::repository::Repository) properly
 pub trait Message<Id>
@@ -21,14 +19,14 @@ where
     fn subject(&self) -> &str;
 
     /// The payload sent to be sent
-    fn payload(&self) -> &JsonValue;
+    fn payload(&self) -> &serde_json::Value;
 
     /// The name of the outbox message schema
     fn name() -> &'static str;
 }
 
 /// The possible statuses of an outbox message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[cfg_attr(feature = "sqlx", sqlx(rename_all = "UPPERCASE"))]
 pub enum MessageStatus {

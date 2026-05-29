@@ -137,7 +137,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlx"))]
 mod tests {
 
     use crate::model::{Message, MessageStatus};
