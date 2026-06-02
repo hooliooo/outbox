@@ -5,6 +5,7 @@ edition.workspace = true
 publish           = false
 
 [features]
+metrics  = ["dep:metrics"]
 nats     = ["dep:async-nats", "dep:base64", "dep:bytes", "dep:tokio", "dep:uuid"]
 postgres = ["dep:sqlx","sqlx/postgres", "sqlx/time", "dep:time", "dep:uuid"]
 
@@ -14,6 +15,9 @@ futures.workspace     = true
 serde_json.workspace  = true
 thiserror.workspace   = true
 tracing.workspace     = true
+
+# metrics feature dependencies
+metrics = { workspace = true, optional = true }
 
 # nats feature dependencies
 async-nats = { workspace = true, optional = true }

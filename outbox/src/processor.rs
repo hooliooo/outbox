@@ -59,6 +59,10 @@ where
         futures::stream::iter(messages)
             .for_each_concurrent(count, |message| async move {
                 let id = message.id().clone();
+                let subject = message.subject().to_owned();
+                
+                #[cfg(feature = "metrics")] 
+                let start = std::time::Instant::now();
                 match self.publisher.publish(message).await {
                     Ok(()) => {
                         debug!("Message successfully published");
@@ -67,13 +71,36 @@ where
                             .update_status(id, MessageStatus::PUBLISHED, None)
                             .await;
 
+                        #[cfg(feature = "metrics")] 
+                        let elapsed = start.elapsed().as_secs_f64();
+
                         match result {
-                            Ok(_) => debug!("Message status updated to PUBLISHED"),
-                            Err(err) => error!("Message status not updated: {:?}", err),
+                            Ok(_) => {
+                                debug!("Message status updated to PUBLISHED");
+                                #[cfg(feature = "metrics")] 
+                                {
+                                    metrics::counter!("outbox.published_total", "subject" => subject.clone()).increment(1); 
+                                    metrics::histogram!("outbox.publish_duration_in_secs", "subject" => subject).record(elapsed);
+                                };
+                            }
+                            Err(err) => {
+                                error!("Message status not updated: {:?}", err);
+                                #[cfg(feature = "metrics")] 
+                                {
+                                    metrics::counter!("outbox.failed_to_update_after_publish_total", "subject" => subject.clone()).increment(1); 
+                                    metrics::histogram!("outbox.failed_to_update_after_publish_duration_in_secs", "subject" => subject).record(elapsed);
+                                };
+                            },
                         }
                     }
                     Err(err) => {
                         error!("Failed to publish message {:?}", err);
+                        #[cfg(feature = "metrics")] 
+                        {
+                            let elapsed = start.elapsed().as_secs_f64();
+                            metrics::counter!("outbox.failed_to_publish_total", "subject" => subject.clone()).increment(1); 
+                            metrics::histogram!("outbox.failed_to_publish_duration_in_secs", "subject" => subject).record(elapsed);
+                        };
 
                         let result = self
                             .repository
@@ -137,7 +164,13 @@ where
             .await
         {
             Ok(recovered) if recovered > 0 => {
-                debug!("{} stale PROCESSING message(s) recovered to PENDING", recovered);
+                debug!(
+                    "{} stale PROCESSING message(s) recovered to PENDING",
+                    recovered
+                );
+
+                #[cfg(feature = "metrics")] 
+                metrics::counter!("outbox.events_reverted_from_processing_to_pending_total").increment(recovered); 
             }
             Ok(_) => {}
             Err(err) => {
