@@ -1,10 +1,20 @@
+//! [`Message`] is the trait that encapsulates the minimum interface required for the outbox crate to
+//! fetch information about the message from the persistence layer to publish to the message
+//! infrastructure
 use std::{
     fmt::{Display, Error, Formatter},
     hash::Hash,
 };
 
+use serde_json::Value;
+
 /// The trait the outbox message entity must adopt to integrate with the
-/// [`Repository`](crate::repository::Repository) properly
+/// [`Repository`](crate::repository::Repository) properly. It contains the minimum interface
+/// required for the outbox crate to fetch the message from the persistence layer to publish to the
+/// messge infrastructure with the [`Publisher`](crate::publisher::Publisher).
+///
+/// There should be a defined struct that contains the complete definition of the outbox message
+/// from the persistence layer and that struct should implement this trait.
 pub trait Message<Id>
 where
     Id: Eq + Hash + PartialEq + Display,
@@ -19,7 +29,7 @@ where
     fn subject(&self) -> &str;
 
     /// The payload sent to be sent
-    fn payload(&self) -> &serde_json::Value;
+    fn payload(&self) -> &Value;
 
     /// The name of the outbox message schema
     fn name() -> &'static str;

@@ -32,10 +32,10 @@ tokio = { version = "1.52.3", features = [
   "time"
 ] }
 tracing = "0.1.44"
-uuid = { version = "1.23.1", features = ["serde", "v7"] } 
+uuid = { version = "1.23.2", features = ["serde", "v7"] } 
 
 # Test Dependencies
-dtor = { version = "1.0.3" }
-serial_test = "3.4.0"
+dtor = { version = "1.0.5" }
+serial_test = "3.5.0"
 testcontainers = "0.27.3"
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }

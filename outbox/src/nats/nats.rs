@@ -1,3 +1,5 @@
+//! [`NATSPublisher`] is an implemntation of the [`Publisher`](crate::publisher::Publisher) that uses the async-nats crate
+//!
 use std::{fmt::Display, hash::Hash, marker::PhantomData, time::Duration};
 
 use crate::{error::OutboxError, model::Message, publisher::Publisher};
@@ -6,7 +8,6 @@ use async_nats::{
     jetstream::{self, Context, context::PublishAckFuture, publish::PublishAck},
 };
 use async_trait::async_trait;
-use base64::{Engine, prelude::BASE64_STANDARD};
 use bytes::Bytes;
 use std::fmt::Debug;
 use tracing::{debug, error};
@@ -26,38 +27,7 @@ where
     Msg: Clone + Debug + Message<Identifier> + Send + Sync,
     Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
 {
-    pub async fn new(
-        nats_url: String,
-        nats_credentials: String,
-        ack_timeout: Duration,
-    ) -> Result<Self, OutboxError> {
-        // Determine if TLS is required based on the URL scheme
-        let needs_tls = nats_url.starts_with("wss://") || nats_url.starts_with("nats+tls://");
-
-        // Connect to NATS with or without credentials
-        let client: Client = if nats_credentials.trim().is_empty() {
-            debug!("Connecting to NATS without credentials");
-            async_nats::connect(&nats_url).await
-        } else {
-            debug!("Connecting to NATS with base64-encoded credentials");
-
-            // Decode base64 credentials
-            let decoded_base64_bytes = BASE64_STANDARD
-                .decode(nats_credentials.trim())
-                .expect("Failed to decode base64 NATS credentials - ensure NATS_USER_CREDS_BASE64 is valid base64");
-
-            // Convert to UTF-8 string (NATS credentials are text-based .creds files)
-            let credentials = String::from_utf8(decoded_base64_bytes).expect(
-                "Failed to convert NATS credentials to UTF-8 - credentials may be corrupted",
-            );
-
-            // Parse and connect with credentials
-            async_nats::ConnectOptions::with_credentials(&credentials)
-                .expect("Failed to parse NATS credentials - ensure the credentials format is valid")
-                .require_tls(needs_tls)
-                .connect(&nats_url)
-                .await
-        }.map_err(|e| OutboxError::PublisherError(e.to_string()))?;
+    pub async fn new(client: Client, ack_timeout: Duration) -> Result<Self, OutboxError> {
         let jetstream: Context = jetstream::new(client.clone());
         Ok(Self {
             client,
@@ -116,6 +86,8 @@ where
 mod tests {
     use std::{assert_matches, time::Duration};
 
+    use async_nats::Client;
+    use base64::{Engine, prelude::BASE64_STANDARD};
     use dtor::dtor;
     use testcontainers::{
         ContainerAsync, GenericImage, ImageExt,
@@ -206,8 +178,36 @@ mod tests {
         let url = format!("nats://localhost:{}", env.nats_port);
         let nats_client = async_nats::connect(&url).await.unwrap();
         let jetstream = async_nats::jetstream::new(nats_client);
+
+        // Determine if TLS is required based on the URL scheme
+        let needs_tls = url.starts_with("wss://") || url.starts_with("nats+tls://");
+        let nats_credentials = String::new();
+
+        // Connect to NATS with or without credentials
+        let client: Client = if nats_credentials.trim().is_empty() {
+            async_nats::connect(&url).await
+        } else {
+
+            // Decode base64 credentials
+            let decoded_base64_bytes = BASE64_STANDARD
+                .decode(nats_credentials.trim())
+                .expect("Failed to decode base64 NATS credentials - ensure NATS_USER_CREDS_BASE64 is valid base64");
+
+            // Convert to UTF-8 string (NATS credentials are text-based .creds files)
+            let credentials = String::from_utf8(decoded_base64_bytes).expect(
+                "Failed to convert NATS credentials to UTF-8 - credentials may be corrupted",
+            );
+
+            // Parse and connect with credentials
+            async_nats::ConnectOptions::with_credentials(&credentials)
+                .expect("Failed to parse NATS credentials - ensure the credentials format is valid")
+                .require_tls(needs_tls)
+                .connect(&url)
+                .await
+        }.unwrap();
+
         let publisher: NATSPublisher<TestMessage, Uuid> =
-            NATSPublisher::new(url.clone(), "".into(), Duration::from_secs(10))
+            NATSPublisher::new(client.clone(), Duration::from_secs(10))
                 .await
                 .unwrap();
 
@@ -285,7 +285,7 @@ mod tests {
         };
 
         let induce_ack_fail_publisher: NATSPublisher<TestMessage, Uuid> =
-            NATSPublisher::new(url.clone(), "".into(), Duration::from_nanos(1))
+            NATSPublisher::new(client.clone(), Duration::from_nanos(1))
                 .await
                 .unwrap();
 

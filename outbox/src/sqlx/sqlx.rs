@@ -1,3 +1,5 @@
+//! The [`SqlxRespository`] is an implementation of the trait [`Repository`](crate::repository::Repository) that uses the sqlx crate
+//!
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
