@@ -15,6 +15,9 @@ pub struct OutboxConfig {
     pub clean_up_interval_in_secs: u32,
     /// The interval (in secs) between polling of messages to publish
     pub polling_interval_in_secs: u32,
+    /// How long (in secs) a message can remain in PROCESSING before it is
+    /// considered stale and reset to PENDING for reprocessing
+    pub stale_threshold_in_secs: u64,
 }
 
 impl Default for OutboxConfig {
@@ -27,6 +30,7 @@ impl Default for OutboxConfig {
     /// | `retention_in_days`          | 7     |
     /// | `clean_up_interval_in_secs`  | 3600  |
     /// | `polling_interval_in_secs`   | 10    |
+    /// | `stale_threshold_in_secs`    | 300   |
     ///
     fn default() -> Self {
         Self {
@@ -35,6 +39,7 @@ impl Default for OutboxConfig {
             retention_in_days: 7,
             clean_up_interval_in_secs: 3600,
             polling_interval_in_secs: 10,
+            stale_threshold_in_secs: 300,
         }
     }
 }

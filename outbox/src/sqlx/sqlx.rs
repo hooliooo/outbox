@@ -40,28 +40,6 @@ where
             _marker: PhantomData,
         }
     }
-
-    /// Fetches messages by status and limit
-    /// # Arguments
-    /// - `limit` The maximum number of messages to be fetched
-    /// - `status` The status of the messages to be queried
-    async fn fetch_messages_by_status(
-        &self,
-        limit: u32,
-        status: MessageStatus,
-    ) -> Result<Vec<Msg>, OutboxError> {
-        let query = AssertSqlSafe(format!(
-            "SELECT * FROM {} WHERE status = $1 LIMIT {}",
-            Msg::name(),
-            limit
-        ));
-        let results: Vec<Msg> = sqlx::query_as(query)
-            .bind(status.to_string())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
-        Ok(results)
-    }
 }
 
 #[async_trait]
@@ -76,14 +54,135 @@ where
         + Sync,
     Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
 {
-    async fn fetch_pending(&self, limit: u32) -> Result<Vec<Msg>, OutboxError> {
-        self.fetch_messages_by_status(limit, MessageStatus::PENDING)
+    async fn fetch_by_status(
+        &self,
+        status: MessageStatus,
+        limit: u32,
+    ) -> Result<Vec<Msg>, OutboxError> {
+        let query = AssertSqlSafe(format!(
+            "SELECT * FROM {} WHERE status = $1 ORDER BY created_at ASC LIMIT {}",
+            Msg::name(),
+            limit
+        ));
+        let results: Vec<Msg> = sqlx::query_as(query)
+            .bind(status.to_string())
+            .fetch_all(&self.pool)
             .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+        Ok(results)
     }
 
-    async fn fetch_failed(&self, limit: u32) -> Result<Vec<Msg>, OutboxError> {
-        self.fetch_messages_by_status(limit, MessageStatus::FAILED)
+    async fn claim(
+        &self,
+        ids: Vec<Identifier>,
+        expected_status: MessageStatus,
+    ) -> Result<Vec<Identifier>, OutboxError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let id_strings: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+
+        let mut tx = self
+            .pool
+            .begin()
             .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        let update_query = AssertSqlSafe(format!(
+            "UPDATE {} SET status = $1 WHERE id = ANY($2) AND status = $3",
+            Msg::name()
+        ));
+        sqlx::query(update_query)
+            .bind(MessageStatus::PROCESSING.to_string())
+            .bind(&id_strings)
+            .bind(expected_status.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        let select_query = AssertSqlSafe(format!(
+            "SELECT id FROM {} WHERE id = ANY($1) AND status = $2",
+            Msg::name()
+        ));
+        let rows: Vec<(String,)> = sqlx::query_as(select_query)
+            .bind(&id_strings)
+            .bind(MessageStatus::PROCESSING.to_string())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        let claimed_strings: std::collections::HashSet<String> =
+            rows.into_iter().map(|(id,)| id).collect();
+        Ok(ids
+            .into_iter()
+            .filter(|id| claimed_strings.contains(&id.to_string()))
+            .collect())
+    }
+
+    /// Optimized Postgres override using `SELECT … FOR UPDATE SKIP LOCKED`
+    /// to atomically fetch and claim in a single transaction with no wasted
+    /// reads under contention.
+    async fn fetch_and_claim(
+        &self,
+        status: MessageStatus,
+        limit: u32,
+    ) -> Result<Vec<Msg>, OutboxError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        let select_query = AssertSqlSafe(format!(
+            "SELECT * FROM {} WHERE status = $1 ORDER BY created_at ASC LIMIT {} FOR UPDATE SKIP LOCKED",
+            Msg::name(),
+            limit
+        ));
+        let results: Vec<Msg> = sqlx::query_as(select_query)
+            .bind(status.to_string())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        if !results.is_empty() {
+            let ids: Vec<String> = results.iter().map(|m| m.id().to_string()).collect();
+            let update_query = AssertSqlSafe(format!(
+                "UPDATE {} SET status = $1 WHERE id = ANY($2)",
+                Msg::name()
+            ));
+            sqlx::query(update_query)
+                .bind(MessageStatus::PROCESSING.to_string())
+                .bind(&ids)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        Ok(results)
+    }
+
+    async fn recover_stale(&self, stale_threshold_in_secs: u64) -> Result<u64, OutboxError> {
+        let query = AssertSqlSafe(format!(
+            "UPDATE {} SET status = $1 WHERE status = $2 AND created_at < now() - (INTERVAL '1 second' * $3)",
+            Msg::name()
+        ));
+        let result = sqlx::query(query)
+            .bind(MessageStatus::PENDING.to_string())
+            .bind(MessageStatus::PROCESSING.to_string())
+            .bind(stale_threshold_in_secs as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+        Ok(result.rows_affected())
     }
 
     async fn clean_up(&self, retention_in_days: u32) -> Result<(), OutboxError> {
@@ -123,7 +222,7 @@ where
         ));
 
         let published_at: Option<OffsetDateTime> = match status {
-            MessageStatus::PENDING | MessageStatus::FAILED => None,
+            MessageStatus::PENDING | MessageStatus::PROCESSING | MessageStatus::FAILED => None,
             MessageStatus::PUBLISHED => Some(OffsetDateTime::now_utc()),
         };
 
@@ -340,25 +439,112 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_fetch_pending() {
+    async fn test_fetch_by_status_returns_matching_rows_without_claiming() {
+        let pool = get_pool().await;
+        truncate_table(pool).await;
+        let mut ids: Vec<Uuid> = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let id =
+                create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            ids.push(id);
+        }
+        create_message(pool, "test-subject", MessageStatus::FAILED, None, None).await;
+
+        let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
+        let results = repo
+            .fetch_by_status(MessageStatus::PENDING, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 3);
+
+        // Status should still be PENDING — fetch_by_status does not claim
+        let still_pending =
+            get_all_messages_by_status_and_ids(pool, MessageStatus::PENDING, ids).await;
+        assert_eq!(still_pending.len(), 3);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_claim_transitions_matching_rows_to_processing() {
+        let pool = get_pool().await;
+        truncate_table(pool).await;
+        let mut ids: Vec<Uuid> = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let id =
+                create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            ids.push(id);
+        }
+
+        let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
+        let claimed = repo
+            .claim(ids.clone(), MessageStatus::PENDING)
+            .await
+            .unwrap();
+
+        assert_eq!(claimed.len(), 3);
+
+        let now_processing =
+            get_all_messages_by_status_and_ids(pool, MessageStatus::PROCESSING, ids).await;
+        assert_eq!(now_processing.len(), 3);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_claim_ignores_rows_with_wrong_status() {
+        let pool = get_pool().await;
+        truncate_table(pool).await;
+        let id = create_message(pool, "test-subject", MessageStatus::PUBLISHED, None, None).await;
+
+        let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
+        let claimed = repo
+            .claim(vec![id], MessageStatus::PENDING)
+            .await
+            .unwrap();
+
+        assert!(claimed.is_empty());
+
+        // Row should still be PUBLISHED
+        let still_published =
+            get_all_messages_by_status_and_ids(pool, MessageStatus::PUBLISHED, vec![id]).await;
+        assert_eq!(still_published.len(), 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_fetch_and_claim_pending() {
         let pool = get_pool().await;
         truncate_table(pool).await;
         let mut pending_message_ids: Vec<Uuid> = Vec::with_capacity(11);
         for _ in 0..=10 {
-            let id = create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            let id =
+                create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
             pending_message_ids.push(id);
         }
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
         let limit = 10;
-        let pending_messages = repo.fetch_pending(limit).await.unwrap();
-        let all_pending_messages = get_all_messages_by_status_and_ids(
+        let pending_messages = repo
+            .fetch_and_claim(MessageStatus::PENDING, limit)
+            .await
+            .unwrap();
+
+        assert_eq!(pending_messages.len(), limit as usize);
+
+        let still_pending = get_all_messages_by_status_and_ids(
             pool,
             MessageStatus::PENDING,
             pending_message_ids.clone(),
         )
         .await;
-        assert_eq!(pending_messages.len(), limit as usize);
-        assert_eq!(all_pending_messages.len(), 11);
+        assert_eq!(still_pending.len(), 1);
+
+        let now_processing = get_all_messages_by_status_and_ids(
+            pool,
+            MessageStatus::PROCESSING,
+            pending_message_ids.clone(),
+        )
+        .await;
+        assert_eq!(now_processing.len(), limit as usize);
 
         for (idx, message) in pending_messages.iter().enumerate() {
             assert_eq!(message.id, pending_message_ids[idx]);
@@ -367,25 +553,66 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_fetch_failed() {
+    async fn test_fetch_and_claim_second_call_gets_remaining() {
+        let pool = get_pool().await;
+        truncate_table(pool).await;
+        let mut pending_message_ids: Vec<Uuid> = Vec::with_capacity(11);
+        for _ in 0..=10 {
+            let id =
+                create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            pending_message_ids.push(id);
+        }
+        let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
+
+        let first_batch = repo
+            .fetch_and_claim(MessageStatus::PENDING, 10)
+            .await
+            .unwrap();
+        assert_eq!(first_batch.len(), 10);
+
+        let second_batch = repo
+            .fetch_and_claim(MessageStatus::PENDING, 10)
+            .await
+            .unwrap();
+        assert_eq!(second_batch.len(), 1);
+        assert_eq!(second_batch[0].id, pending_message_ids[10]);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_fetch_and_claim_failed() {
         let pool = get_pool().await;
         truncate_table(pool).await;
         let mut failed_message_ids: Vec<Uuid> = Vec::with_capacity(11);
         for _ in 0..=10 {
-            let id = create_message(pool, "test-subject", MessageStatus::FAILED, None, None).await;
+            let id =
+                create_message(pool, "test-subject", MessageStatus::FAILED, None, None).await;
             failed_message_ids.push(id);
         }
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
         let limit = 10;
-        let failed_messages = repo.fetch_failed(limit).await.unwrap();
-        let all_failed_messages = get_all_messages_by_status_and_ids(
+        let failed_messages = repo
+            .fetch_and_claim(MessageStatus::FAILED, limit)
+            .await
+            .unwrap();
+
+        assert_eq!(failed_messages.len(), limit as usize);
+
+        let still_failed = get_all_messages_by_status_and_ids(
             pool,
             MessageStatus::FAILED,
             failed_message_ids.clone(),
         )
         .await;
-        assert_eq!(failed_messages.len(), limit as usize);
-        assert_eq!(all_failed_messages.len(), 11);
+        assert_eq!(still_failed.len(), 1);
+
+        let now_processing = get_all_messages_by_status_and_ids(
+            pool,
+            MessageStatus::PROCESSING,
+            failed_message_ids.clone(),
+        )
+        .await;
+        assert_eq!(now_processing.len(), limit as usize);
 
         for (idx, message) in failed_messages.iter().enumerate() {
             assert_eq!(message.id, failed_message_ids[idx]);
@@ -503,5 +730,49 @@ mod tests {
 
         assert!(message.published_at.is_none());
         assert!(message.last_error.is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_recover_stale_resets_processing_to_pending() {
+        let pool = get_pool().await;
+        truncate_table(pool).await;
+
+        let ten_minutes_ago = OffsetDateTime::now_utc() - Duration::minutes(10);
+        let id = create_message(
+            pool,
+            "test-subject",
+            MessageStatus::PROCESSING,
+            Some(ten_minutes_ago),
+            None,
+        )
+        .await;
+
+        // A threshold of 300s (5min) should recover this 10-minute-old row
+        let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
+        let recovered = repo.recover_stale(300).await.unwrap();
+        assert_eq!(recovered, 1);
+
+        let messages =
+            get_all_messages_by_status_and_ids(pool, MessageStatus::PENDING, vec![id]).await;
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_recover_stale_ignores_recent_processing() {
+        let pool = get_pool().await;
+        truncate_table(pool).await;
+
+        // Created just now — should NOT be recovered with a 300s threshold
+        let id = create_message(pool, "test-subject", MessageStatus::PROCESSING, None, None).await;
+
+        let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
+        let recovered = repo.recover_stale(300).await.unwrap();
+        assert_eq!(recovered, 0);
+
+        let messages =
+            get_all_messages_by_status_and_ids(pool, MessageStatus::PROCESSING, vec![id]).await;
+        assert_eq!(messages.len(), 1);
     }
 }

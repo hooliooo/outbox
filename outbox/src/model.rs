@@ -42,6 +42,8 @@ where
 pub enum MessageStatus {
     /// The outbox message is waiting to be published
     PENDING,
+    /// The outbox message has been claimed by a processor instance and is being published
+    PROCESSING,
     /// The outbox message has been published
     PUBLISHED,
     /// The outbox message was not published due to a failure
@@ -52,6 +54,7 @@ impl Display for MessageStatus {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         let string = match self {
             MessageStatus::PENDING => "PENDING",
+            MessageStatus::PROCESSING => "PROCESSING",
             MessageStatus::PUBLISHED => "PUBLISHED",
             MessageStatus::FAILED => "FAILED",
         };
@@ -65,6 +68,7 @@ impl TryFrom<String> for MessageStatus {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.to_uppercase().as_str() {
             "PENDING" => Ok(MessageStatus::PENDING),
+            "PROCESSING" => Ok(MessageStatus::PROCESSING),
             "PUBLISHED" => Ok(MessageStatus::PUBLISHED),
             "FAILED" => Ok(MessageStatus::FAILED),
             _ => Err(format!("Invalid outbox status string: {}", value)),

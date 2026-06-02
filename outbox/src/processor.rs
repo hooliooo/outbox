@@ -40,8 +40,8 @@ pub struct CleanUp;
 impl<State, R, OutboxMessage, Identifier, P> Processor<State, R, OutboxMessage, Identifier, P>
 where
     R: Repository<OutboxMessage, Identifier>,
-    OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display + Clone,
+    OutboxMessage: Clone + Debug + Message<Identifier> + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
     P: Publisher<OutboxMessage>,
 {
     /// Creates a Processor
@@ -94,18 +94,19 @@ where
 impl<R, OutboxMessage, Identifier, P> Processor<Pending, R, OutboxMessage, Identifier, P>
 where
     R: Repository<OutboxMessage, Identifier>,
-    OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display + Clone,
+    OutboxMessage: Clone + Debug + Message<Identifier> + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
     P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of pending events.
     ///
-    /// Fetches up to the [`OutboxConfig`](crate::config::OutboxConfig) `batch_size` configuration from
-    /// the [`Repository`](crate::config::Repository)
+    /// Fetches and claims up to `repository_batch_size` PENDING messages via
+    /// [`Repository::fetch_and_claim`](crate::repository::Repository::fetch_and_claim),
+    /// then publishes them.
     pub async fn process(&self) -> Result<usize, OutboxError> {
         let messages = self
             .repository
-            .fetch_pending(self.config.repository_batch_size)
+            .fetch_and_claim(MessageStatus::PENDING, self.config.repository_batch_size)
             .await?;
         if messages.is_empty() {
             return Ok(0);
@@ -119,18 +120,34 @@ where
 impl<R, OutboxMessage, Identifier, P> Processor<Failed, R, OutboxMessage, Identifier, P>
 where
     R: Repository<OutboxMessage, Identifier>,
-    OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display + Clone,
+    OutboxMessage: Clone + Debug + Message<Identifier> + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
     P: Publisher<OutboxMessage>,
 {
-    /// Processes a batch of failed events.
+    /// Recovers stale PROCESSING messages, then processes a batch of failed events.
     ///
-    /// Fetches up to the [`OutboxConfig`](crate::config::OutboxConfig) `batch_size` configuration from
-    /// the [`Repository`](crate::config::Repository)
+    /// Messages that have been stuck in PROCESSING longer than
+    /// [`OutboxConfig::stale_threshold_in_secs`](crate::config::OutboxConfig) are reset
+    /// to PENDING so the pending processor can retry them. After recovery, up to
+    /// `repository_batch_size` FAILED messages are fetched, claimed, and republished.
     pub async fn process(&self) -> Result<usize, OutboxError> {
+        match self
+            .repository
+            .recover_stale(self.config.stale_threshold_in_secs)
+            .await
+        {
+            Ok(recovered) if recovered > 0 => {
+                debug!("{} stale PROCESSING message(s) recovered to PENDING", recovered);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                error!("Failed to recover stale PROCESSING messages: {:?}", err);
+            }
+        }
+
         let messages = self
             .repository
-            .fetch_failed(self.config.repository_batch_size)
+            .fetch_and_claim(MessageStatus::FAILED, self.config.repository_batch_size)
             .await?;
         if messages.is_empty() {
             return Ok(0);
@@ -144,8 +161,8 @@ where
 impl<R, OutboxMessage, Identifier, P> Processor<CleanUp, R, OutboxMessage, Identifier, P>
 where
     R: Repository<OutboxMessage, Identifier>,
-    OutboxMessage: Clone + Debug + Message<Identifier>,
-    Identifier: Eq + Hash + PartialEq + Display + Clone,
+    OutboxMessage: Clone + Debug + Message<Identifier> + Send + Sync,
+    Identifier: Eq + Hash + PartialEq + Display + Clone + Send + Sync,
     P: Publisher<OutboxMessage>,
 {
     /// Processes a batch of events that have reached the retention period.
