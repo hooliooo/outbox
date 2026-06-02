@@ -14,20 +14,14 @@ async-trait = { version = "0.1.89" }
 base64 = { version = "0.22.1" }
 bytes = "1.11.1"
 futures = "0.3.32"
-serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sqlx = { version = "0.9.0", features = [
   "runtime-tokio",
   "macros", 
-  "uuid", 
-  "time"
 ] }
 thiserror = { version = "2.0.18" }
 time = { version = "0.3.47", features = ["serde"] }
-tokio = { version = "1.52.3", features = [
-  "macros", 
-  "rt-multi-thread", 
-  "sync", 
+tokio = { version = "1.52.3", default-features = false, features = [
   "time"
 ] }
 tracing = "0.1.44"

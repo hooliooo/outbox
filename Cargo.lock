@@ -1573,7 +1573,6 @@ dependencies = [
  "bytes",
  "dtor",
  "futures",
- "serde",
  "serde_json",
  "serial_test",
  "sqlx",
@@ -2395,7 +2394,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
- "uuid",
 ]
 
 [[package]]
@@ -2462,7 +2460,6 @@ dependencies = [
  "thiserror",
  "time",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -2498,7 +2495,6 @@ dependencies = [
  "thiserror",
  "time",
  "tracing",
- "uuid",
  "whoami",
 ]
 
@@ -2525,7 +2521,6 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid",
 ]
 
 [[package]]

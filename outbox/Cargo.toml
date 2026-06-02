@@ -1,31 +1,35 @@
 [package]
-name = "outbox"
-version = "0.1.0"
+name              = "outbox"
+version           = "0.1.0"
 edition.workspace = true
-publish = false
+publish           = false
 
 [features]
-nats = ["dep:async-nats", "dep:base64", "dep:bytes", "dep:serde_json", "dep:tokio", "dep:uuid"]
-postgres = ["dep:serde", "dep:serde_json","dep:sqlx", "sqlx/postgres", "dep:time", "dep:tokio", "dep:uuid"]
+nats     = ["dep:async-nats", "dep:base64", "dep:bytes", "dep:tokio", "dep:uuid"]
+postgres = ["dep:sqlx","sqlx/postgres", "sqlx/time", "dep:time", "dep:uuid"]
 
 [dependencies]
-async-nats = { workspace = true, optional = true }
 async-trait.workspace = true
-base64 = { workspace = true, optional = true }
-bytes = { workspace = true, optional = true }
-futures.workspace = true
-serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+futures.workspace     = true
+serde_json.workspace  = true
+thiserror.workspace   = true
+tracing.workspace     = true
+
+# nats feature dependencies
+async-nats = { workspace = true, optional = true }
+base64     = { workspace = true, optional = true }
+bytes      = { workspace = true, optional = true }
+tokio      = { workspace = true, optional = true }
+
+# postgres feature dependencies
 sqlx = { workspace = true, optional = true }
-thiserror.workspace = true
 time = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
-tracing.workspace = true
+
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
-dtor.workspace = true
-serial_test.workspace = true
-testcontainers.workspace = true
+dtor.workspace                   = true
+serial_test.workspace            = true
+testcontainers.workspace         = true
 testcontainers-modules.workspace = true
-tokio.workspace = true
+tokio.workspace                  = true
