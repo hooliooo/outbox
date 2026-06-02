@@ -37,8 +37,8 @@ where
 
 /// The possible statuses of an outbox message
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "UPPERCASE"))]
+#[cfg_attr(feature = "postgres", derive(sqlx::Type))]
+#[cfg_attr(feature = "postgres", sqlx(rename_all = "UPPERCASE"))]
 pub enum MessageStatus {
     /// The outbox message is waiting to be published
     PENDING,

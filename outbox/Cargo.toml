@@ -6,7 +6,7 @@ publish = false
 
 [features]
 nats = ["dep:async-nats", "dep:base64", "dep:bytes", "dep:serde_json", "dep:tokio", "dep:uuid"]
-sqlx = ["dep:serde", "dep:serde_json","dep:sqlx", "dep:time", "dep:tokio", "dep:uuid"]
+postgres = ["dep:serde", "dep:serde_json","dep:sqlx", "sqlx/postgres", "dep:time", "dep:tokio", "dep:uuid"]
 
 [dependencies]
 async-nats = { workspace = true, optional = true }

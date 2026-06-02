@@ -9,6 +9,6 @@ pub mod repository;
 #[path = "nats/nats.rs"]
 pub mod nats;
 
-#[cfg(feature = "sqlx")]
-#[path = "sqlx/sqlx.rs"]
-pub mod sqlx;
+#[cfg(feature = "postgres")]
+#[path = "postgres/postgres.rs"]
+pub mod postgres;

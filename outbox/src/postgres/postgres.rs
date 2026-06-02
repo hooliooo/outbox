@@ -238,7 +238,7 @@ where
     }
 }
 
-#[cfg(all(test, feature = "sqlx"))]
+#[cfg(all(test, feature = "postgres"))]
 mod tests {
 
     use crate::model::{Message, MessageStatus};
@@ -255,7 +255,7 @@ mod tests {
     use tokio::sync::OnceCell;
     use uuid::Uuid;
 
-    use crate::sqlx::SqlxRespository;
+    use crate::postgres::SqlxRespository;
 
     static CONTAINER: OnceCell<ContainerAsync<Postgres>> = OnceCell::const_new();
     static POOL: OnceCell<PgPool> = OnceCell::const_new();
@@ -444,8 +444,7 @@ mod tests {
         truncate_table(pool).await;
         let mut ids: Vec<Uuid> = Vec::with_capacity(3);
         for _ in 0..3 {
-            let id =
-                create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            let id = create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
             ids.push(id);
         }
         create_message(pool, "test-subject", MessageStatus::FAILED, None, None).await;
@@ -471,8 +470,7 @@ mod tests {
         truncate_table(pool).await;
         let mut ids: Vec<Uuid> = Vec::with_capacity(3);
         for _ in 0..3 {
-            let id =
-                create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            let id = create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
             ids.push(id);
         }
 
@@ -497,10 +495,7 @@ mod tests {
         let id = create_message(pool, "test-subject", MessageStatus::PUBLISHED, None, None).await;
 
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
-        let claimed = repo
-            .claim(vec![id], MessageStatus::PENDING)
-            .await
-            .unwrap();
+        let claimed = repo.claim(vec![id], MessageStatus::PENDING).await.unwrap();
 
         assert!(claimed.is_empty());
 
@@ -517,8 +512,7 @@ mod tests {
         truncate_table(pool).await;
         let mut pending_message_ids: Vec<Uuid> = Vec::with_capacity(11);
         for _ in 0..=10 {
-            let id =
-                create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            let id = create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
             pending_message_ids.push(id);
         }
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
@@ -558,8 +552,7 @@ mod tests {
         truncate_table(pool).await;
         let mut pending_message_ids: Vec<Uuid> = Vec::with_capacity(11);
         for _ in 0..=10 {
-            let id =
-                create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
+            let id = create_message(pool, "test-subject", MessageStatus::PENDING, None, None).await;
             pending_message_ids.push(id);
         }
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
@@ -585,8 +578,7 @@ mod tests {
         truncate_table(pool).await;
         let mut failed_message_ids: Vec<Uuid> = Vec::with_capacity(11);
         for _ in 0..=10 {
-            let id =
-                create_message(pool, "test-subject", MessageStatus::FAILED, None, None).await;
+            let id = create_message(pool, "test-subject", MessageStatus::FAILED, None, None).await;
             failed_message_ids.push(id);
         }
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
