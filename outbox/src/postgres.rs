@@ -2,8 +2,10 @@
 //!
 use std::{
     fmt::{Debug, Display},
+    future::Future,
     hash::Hash,
     marker::PhantomData,
+    pin::Pin,
 };
 
 use async_trait::async_trait;
@@ -39,6 +41,29 @@ where
             pool,
             _marker: PhantomData,
         }
+    }
+
+    pub async fn with_transaction<T, F>(&self, f: F) -> Result<T, OutboxError>
+    where
+        T: Send,
+        F: for<'c> FnOnce(
+            &'c mut sqlx::postgres::PgConnection,
+        )
+            -> Pin<Box<dyn Future<Output = Result<T, OutboxError>> + Send + 'c>>,
+    {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        let result = f(&mut tx).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
+        Ok(result)
     }
 }
 
@@ -83,38 +108,35 @@ where
 
         let id_strings: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+        let rows: Vec<(String,)> = self
+            .with_transaction(|conn| {
+                Box::pin(async move {
+                    let update_query = AssertSqlSafe(format!(
+                        "UPDATE {} SET status = $1 WHERE id = ANY($2) AND status = $3",
+                        Msg::name()
+                    ));
+                    sqlx::query(update_query)
+                        .bind(MessageStatus::PROCESSING.to_string())
+                        .bind(&id_strings)
+                        .bind(expected_status.to_string())
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
 
-        let update_query = AssertSqlSafe(format!(
-            "UPDATE {} SET status = $1 WHERE id = ANY($2) AND status = $3",
-            Msg::name()
-        ));
-        sqlx::query(update_query)
-            .bind(MessageStatus::PROCESSING.to_string())
-            .bind(&id_strings)
-            .bind(expected_status.to_string())
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
-
-        let select_query = AssertSqlSafe(format!(
-            "SELECT id FROM {} WHERE id = ANY($1) AND status = $2",
-            Msg::name()
-        ));
-        let rows: Vec<(String,)> = sqlx::query_as(select_query)
-            .bind(&id_strings)
-            .bind(MessageStatus::PROCESSING.to_string())
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
-
-        tx.commit()
-            .await
-            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+                    let select_query = AssertSqlSafe(format!(
+                        "SELECT id FROM {} WHERE id = ANY($1) AND status = $2",
+                        Msg::name()
+                    ));
+                    let rows: Vec<(String,)> = sqlx::query_as(select_query)
+                        .bind(&id_strings)
+                        .bind(MessageStatus::PROCESSING.to_string())
+                        .fetch_all(&mut *conn)
+                        .await
+                        .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+                    Ok(rows)
+                })
+            })
+            .await?;
 
         let claimed_strings: std::collections::HashSet<String> =
             rows.into_iter().map(|(id,)| id).collect();
@@ -132,46 +154,42 @@ where
         status: MessageStatus,
         limit: u32,
     ) -> Result<Vec<Msg>, OutboxError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+        let results = self.with_transaction(|conn| {
+            Box::pin(async move {
+                let select_query = AssertSqlSafe(format!(
+                    "SELECT * FROM {} WHERE status = $1 ORDER BY created_at ASC LIMIT {} FOR UPDATE SKIP LOCKED",
+                    Msg::name(),
+                    limit
+                ));
+                let results: Vec<Msg> = sqlx::query_as(select_query)
+                    .bind(status.to_string())
+                    .fetch_all(&mut *conn)
+                    .await
+                    .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
 
-        let select_query = AssertSqlSafe(format!(
-            "SELECT * FROM {} WHERE status = $1 ORDER BY created_at ASC LIMIT {} FOR UPDATE SKIP LOCKED",
-            Msg::name(),
-            limit
-        ));
-        let results: Vec<Msg> = sqlx::query_as(select_query)
-            .bind(status.to_string())
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+                if !results.is_empty() {
+                    let ids: Vec<String> = results.iter().map(|m| m.id().to_string()).collect();
+                    let update_query = AssertSqlSafe(format!(
+                        "UPDATE {} SET status = $1 WHERE id = ANY($2)",
+                        Msg::name()
+                    ));
+                    sqlx::query(update_query)
+                        .bind(MessageStatus::PROCESSING.to_string())
+                        .bind(&ids)
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+                }
 
-        if !results.is_empty() {
-            let ids: Vec<String> = results.iter().map(|m| m.id().to_string()).collect();
-            let update_query = AssertSqlSafe(format!(
-                "UPDATE {} SET status = $1 WHERE id = ANY($2)",
-                Msg::name()
-            ));
-            sqlx::query(update_query)
-                .bind(MessageStatus::PROCESSING.to_string())
-                .bind(&ids)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
-        }
-
-        tx.commit()
-            .await
-            .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+                Ok(results)
+            })
+        }).await?;
 
         Ok(results)
     }
 
     async fn recover_stale(&self, stale_threshold_in_secs: u64) -> Result<u64, OutboxError> {
-        let query = AssertSqlSafe(format!(
+        let query: AssertSqlSafe<String> = AssertSqlSafe(format!(
             "UPDATE {} SET status = $1 WHERE status = $2 AND created_at < now() - (INTERVAL '1 second' * $3)",
             Msg::name()
         ));
@@ -187,7 +205,7 @@ where
     }
 
     async fn clean_up(&self, retention_in_days: u32) -> Result<u64, OutboxError> {
-        let query = AssertSqlSafe(format!(
+        let query: AssertSqlSafe<String> = AssertSqlSafe(format!(
             "
             DELETE FROM {} 
             WHERE id IN (
@@ -214,7 +232,7 @@ where
         status: MessageStatus,
         last_error: Option<String>,
     ) -> Result<(), OutboxError> {
-        let query = AssertSqlSafe(format!(
+        let query: AssertSqlSafe<String> = AssertSqlSafe(format!(
             "
             UPDATE {}
             SET status = $1, published_at = $2, last_error = $3
