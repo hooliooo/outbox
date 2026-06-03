@@ -59,10 +59,11 @@ where
         futures::stream::iter(messages)
             .for_each_concurrent(count, |message| async move {
                 let id = message.id().clone();
-                let subject = message.subject().to_owned();
                 
                 #[cfg(feature = "metrics")] 
                 let start = std::time::Instant::now();
+                #[cfg(feature = "metrics")] 
+                let subject = message.subject().to_owned();
                 match self.publisher.publish(message).await {
                     Ok(()) => {
                         debug!("Message successfully published");
@@ -136,6 +137,7 @@ where
             .fetch_and_claim(MessageStatus::PENDING, self.config.repository_batch_size)
             .await?;
         if messages.is_empty() {
+            debug!("No PENDING messages to publish");
             return Ok(0);
         }
         let count = messages.len();
@@ -172,7 +174,9 @@ where
                 #[cfg(feature = "metrics")] 
                 metrics::counter!("outbox.events_reverted_from_processing_to_pending_total").increment(recovered); 
             }
-            Ok(_) => {}
+            Ok(_) => {
+                debug!("No stale messages");
+            }
             Err(err) => {
                 error!("Failed to recover stale PROCESSING messages: {:?}", err);
             }
@@ -183,6 +187,7 @@ where
             .fetch_and_claim(MessageStatus::FAILED, self.config.repository_batch_size)
             .await?;
         if messages.is_empty() {
+            debug!("No FAILED messages to publish");
             return Ok(0);
         }
         let count = messages.len();
@@ -203,9 +208,18 @@ where
     /// Fetches the messages that have reached the `retention_in_days` defined in the
     /// [`OutboxConfig`](crate::config::OutboxConfig)
     pub async fn process(&self) -> Result<(), OutboxError> {
+        #[cfg(feature = "metrics")] 
+        let start = std::time::Instant::now();
+
         self.repository
             .clean_up(self.config.retention_in_days)
             .await?;
+
+        #[cfg(feature = "metrics")]
+        {
+            let elapsed = start.elapsed().as_secs_f64();
+            metrics::histogram!("outbox.message_clean_up_duration_in_secs").record(elapsed);
+        };
         Ok(())
     }
 }

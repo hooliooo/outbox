@@ -182,10 +182,11 @@ where
             .execute(&self.pool)
             .await
             .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
+
         Ok(result.rows_affected())
     }
 
-    async fn clean_up(&self, retention_in_days: u32) -> Result<(), OutboxError> {
+    async fn clean_up(&self, retention_in_days: u32) -> Result<u64, OutboxError> {
         let query = AssertSqlSafe(format!(
             "
             DELETE FROM {} 
@@ -198,12 +199,13 @@ where
             Msg::name(),
             Msg::name(),
         ));
-        sqlx::query(query)
+        let result = sqlx::query(query)
             .bind(retention_in_days as i64)
             .execute(&self.pool)
             .await
             .map_err(|e| OutboxError::DatabaseError(e.to_string()))?;
-        Ok(())
+
+        Ok(result.rows_affected())
     }
 
     async fn update_status(
@@ -655,7 +657,8 @@ mod tests {
         let count: i64 = count.get(0);
         assert_eq!(count, 14);
         let repo: SqlxRespository<OutboxMessage, Uuid> = SqlxRespository::new(pool.clone());
-        repo.clean_up(1).await.unwrap();
+        let count = repo.clean_up(1).await.unwrap();
+        assert_eq!(count, 4);
 
         let count = sqlx::query(sql_query)
             .bind(all_ids)

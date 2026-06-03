@@ -90,7 +90,7 @@ where
     /// [`MessageStatus::PUBLISHED`](crate::model::MessageStatus) and older than the retention period
     /// # Arguments
     /// - `retention_in_days` The number of days published outbox messages from be retained
-    async fn clean_up(&self, retention_in_days: u32) -> Result<(), OutboxError>;
+    async fn clean_up(&self, retention_in_days: u32) -> Result<u64, OutboxError>;
 
     /// Updates the status of the outbox message
     /// # Arguments

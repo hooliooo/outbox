@@ -6,9 +6,7 @@ pub mod publisher;
 pub mod repository;
 
 #[cfg(feature = "nats")]
-#[path = "nats/nats.rs"]
 pub mod nats;
 
 #[cfg(feature = "postgres")]
-#[path = "postgres/postgres.rs"]
 pub mod postgres;
