@@ -1,0 +1,88 @@
+# This template contains all of the arguments with their default values.
+# Note that many of the settings here are just the defaults, but we list
+# them for completeness.
+
+[graph]
+# If 1 or more target triples (and optionally, target_features) are specified,
+# only the specified targets will be checked when running `cargo deny check`.
+# This means, if a particular package is only used on a target architecture
+# that is not listed, it will not be checked.
+targets = []
+
+# When creating the dependency graph used as the source of truth, the default
+# behavior is to include all features that are enabled by default.
+# This setting allows you to also include the "default" feature.
+all-features = false
+
+# If true, the "dev" dependencies will be ignored.
+no-default-features = false
+
+# If false, the "dev" dependencies will be included.
+# Note that currently dev dependencies are not effectively "enabled"
+# by any other feature, so they are always checked if this is true.
+# It is recommended to keep this set to false if you want to verify dev dependencies.
+# But if you only care about the production artifacts, you can set this to true.
+exclude-dev = false
+
+[advisories]
+# The path where the advisory database is cloned/checked out.
+# db-path = "~/.cargo/advisory-db"
+
+# The URL of the advisory database.
+# db-url = "https://github.com/rustsec/advisory-db"
+
+unmaintained = "workspace"
+
+# The lint level for crates that have been yanked from their source registry
+yanked = "warn"
+
+# A list of advisory IDs to ignore. Note that ignored advisories will still
+# output a note.
+ignore = [
+    # "RUSTSEC-0000-0000",
+]
+
+[licenses]
+# List of explicitly allowed licenses
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib"
+]
+private = { ignore = true }
+
+confidence-threshold = 0.8
+
+[bans]
+# Lint level for multiple versions of the same crate
+multiple-versions = "warn"
+
+# Lint level for crates that are explicitly banned
+wildcards = "allow"
+highlight = "all"
+
+# List of crates to deny
+deny = [
+    # { name = "openssl", version = "=0.10" },
+]
+
+# List of crates to allow (if you want to whitelist only specific crates)
+# allow = []
+
+[sources]
+# Lint level for crates from unknown registries
+unknown-registry = "warn"
+
+# Lint level for crates from unknown git sources
+unknown-git = "warn"
+
+# List of allowed registries
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# List of allowed git sources
+allow-git = []
+

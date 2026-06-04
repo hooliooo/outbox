@@ -1,6 +1,7 @@
 //! The [`SqlxRespository`] is an implementation of the trait [`Repository`](crate::repository::Repository) that uses the sqlx crate
 //!
 use std::{
+    collections::HashSet,
     fmt::{Debug, Display},
     future::Future,
     hash::Hash,
@@ -138,11 +139,10 @@ where
             })
             .await?;
 
-        let claimed_strings: std::collections::HashSet<String> =
-            rows.into_iter().map(|(id,)| id).collect();
+        let claimed_ids: HashSet<String> = rows.into_iter().map(|(id,)| id).collect();
         Ok(ids
             .into_iter()
-            .filter(|id| claimed_strings.contains(&id.to_string()))
+            .filter(|id| claimed_ids.contains(&id.to_string()))
             .collect())
     }
 
