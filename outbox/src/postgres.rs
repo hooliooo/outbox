@@ -90,7 +90,7 @@ where
             Msg::name(),
             limit
         ));
-        let results: Vec<Msg> = sqlx::query_as(query)
+        let results: Vec<Msg> = sqlx::query_as::<sqlx::Postgres, Msg>(query)
             .bind(status.to_string())
             .fetch_all(&self.pool)
             .await
@@ -116,7 +116,7 @@ where
                         "UPDATE {} SET status = $1 WHERE id = ANY($2) AND status = $3",
                         Msg::name()
                     ));
-                    sqlx::query(update_query)
+                    sqlx::query::<sqlx::Postgres>(update_query)
                         .bind(MessageStatus::PROCESSING.to_string())
                         .bind(&id_strings)
                         .bind(expected_status.to_string())
@@ -161,7 +161,7 @@ where
                     Msg::name(),
                     limit
                 ));
-                let results: Vec<Msg> = sqlx::query_as(select_query)
+                let results: Vec<Msg> = sqlx::query_as::<sqlx::Postgres, Msg>(select_query)
                     .bind(status.to_string())
                     .fetch_all(&mut *conn)
                     .await
@@ -173,7 +173,7 @@ where
                         "UPDATE {} SET status = $1 WHERE id = ANY($2)",
                         Msg::name()
                     ));
-                    sqlx::query(update_query)
+                    sqlx::query::<sqlx::Postgres>(update_query)
                         .bind(MessageStatus::PROCESSING.to_string())
                         .bind(&ids)
                         .execute(&mut *conn)
@@ -193,7 +193,7 @@ where
             "UPDATE {} SET status = $1 WHERE status = $2 AND created_at < now() - (INTERVAL '1 second' * $3)",
             Msg::name()
         ));
-        let result = sqlx::query(query)
+        let result = sqlx::query::<sqlx::Postgres>(query)
             .bind(MessageStatus::PENDING.to_string())
             .bind(MessageStatus::PROCESSING.to_string())
             .bind(stale_threshold_in_secs as i64)
@@ -217,7 +217,7 @@ where
             Msg::name(),
             Msg::name(),
         ));
-        let result = sqlx::query(query)
+        let result = sqlx::query::<sqlx::Postgres>(query)
             .bind(retention_in_days as i64)
             .execute(&self.pool)
             .await
@@ -246,7 +246,7 @@ where
             MessageStatus::PUBLISHED => Some(OffsetDateTime::now_utc()),
         };
 
-        sqlx::query(query)
+        sqlx::query::<sqlx::Postgres>(query)
             .bind(status.to_string())
             .bind(published_at)
             .bind(last_error)

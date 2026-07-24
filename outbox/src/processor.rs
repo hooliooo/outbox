@@ -54,6 +54,9 @@ where
         }
     }
 
+    /// Publishes the messages in a concurrent manner
+    /// # Arguments
+    /// * `messages` The messages to be published concurrently
     async fn publish_messages(&self, messages: Vec<OutboxMessage>) {
         let count = self.config.publisher_batch_size as usize;
         futures::stream::iter(messages)
