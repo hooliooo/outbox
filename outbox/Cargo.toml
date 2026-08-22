@@ -5,9 +5,11 @@ edition.workspace = true
 publish           = false
 
 [features]
-metrics  = ["dep:metrics"]
-nats     = ["dep:async-nats", "dep:base64", "dep:bytes", "dep:tokio", "dep:uuid"]
-postgres = ["dep:sqlx","sqlx/postgres", "sqlx/time", "dep:time", "dep:uuid"]
+chrono-postgres = ["dep:chrono", "postgres", "sqlx/chrono"]
+metrics         = ["dep:metrics"]
+nats            = ["dep:async-nats", "dep:base64", "dep:bytes", "dep:tokio", "dep:uuid"]
+postgres        = ["dep:sqlx","sqlx/postgres", "dep:uuid"]
+time-postgres   = ["dep:time", "postgres", "sqlx/time"] 
 
 [dependencies]
 async-trait.workspace = true
@@ -26,6 +28,7 @@ bytes      = { workspace = true, optional = true }
 tokio      = { workspace = true, optional = true }
 
 # postgres feature dependencies
+chrono = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
 

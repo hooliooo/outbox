@@ -31,6 +31,10 @@ where
     /// The payload sent to be sent
     fn payload(&self) -> &Value;
 
+    /// The lease token stamped when the message is claimed. It is `None`
+    /// when not claimed
+    fn lease_token(&self) -> Option<&str>;
+
     /// The name of the outbox message schema
     fn name() -> &'static str;
 }
@@ -41,22 +45,22 @@ where
 #[cfg_attr(feature = "postgres", sqlx(rename_all = "UPPERCASE"))]
 pub enum MessageStatus {
     /// The outbox message is waiting to be published
-    PENDING,
+    Pending,
     /// The outbox message has been claimed by a processor instance and is being published
-    PROCESSING,
+    Processing,
     /// The outbox message has been published
-    PUBLISHED,
+    Published,
     /// The outbox message was not published due to a failure
-    FAILED,
+    Failed,
 }
 
 impl Display for MessageStatus {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         let string = match self {
-            MessageStatus::PENDING => "PENDING",
-            MessageStatus::PROCESSING => "PROCESSING",
-            MessageStatus::PUBLISHED => "PUBLISHED",
-            MessageStatus::FAILED => "FAILED",
+            MessageStatus::Pending => "PENDING",
+            MessageStatus::Processing => "PROCESSING",
+            MessageStatus::Published => "PUBLISHED",
+            MessageStatus::Failed => "FAILED",
         };
         write!(f, "{}", string)
     }
@@ -67,11 +71,20 @@ impl TryFrom<String> for MessageStatus {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.to_uppercase().as_str() {
-            "PENDING" => Ok(MessageStatus::PENDING),
-            "PROCESSING" => Ok(MessageStatus::PROCESSING),
-            "PUBLISHED" => Ok(MessageStatus::PUBLISHED),
-            "FAILED" => Ok(MessageStatus::FAILED),
+            "PENDING" => Ok(MessageStatus::Pending),
+            "PROCESSING" => Ok(MessageStatus::Processing),
+            "PUBLISHED" => Ok(MessageStatus::Published),
+            "FAILED" => Ok(MessageStatus::Failed),
             _ => Err(format!("Invalid outbox status string: {}", value)),
         }
     }
+}
+
+/// The possible outcomes of a publish attempt
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublishOutcome {
+    /// The message was published successfully.
+    Published,
+    /// The message failed to publish; carries the error detail to persist.
+    Failed(String),
 }

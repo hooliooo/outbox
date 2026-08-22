@@ -9,22 +9,23 @@ resolver = "3"
 members = ["outbox"]
 
 [workspace.dependencies]
-async-nats = { version = "0.49.0", features = ["websockets"] }
-async-trait = { version = "0.1.89" }
-base64 = { version = "0.22.1" }
-bytes = "1.11.1"
-futures = "0.3.32"
+async-nats = { version = "0.50.0", features = ["websockets"] }
+async-trait = { version = "0.1.92" }
+base64 = { version = "0.23.1" }
+bytes = "1.12.1"
+chrono =  { version = "0.4.45" }
+futures = "0.3.34"
 metrics = "0.24.6"
-serde_json = "1.0.150"
+serde_json = "1.0.151"
 sqlx = { version = "0.9.0", features = ["runtime-tokio"] }
-thiserror = { version = "2.0.18" }
-time = { version = "0.3.47", features = ["serde"] }
-tokio = { version = "1.52.3", features = ["time"] }
+thiserror = { version = "2.0.20" }
+time = { version = "0.3.55", features = ["serde"] }
+tokio = { version = "1.53.1", features = ["time"] }
 tracing = "0.1.44"
-uuid = { version = "1.23.2", features = ["serde", "v7"] } 
+uuid = { version = "1.25.0", features = ["serde", "v7"] } 
 
 # Test Dependencies
 dtor = { version = "1.0.5" }
-serial_test = "3.5.0"
+serial_test = "4.0.1"
 testcontainers = "0.27.3"
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }

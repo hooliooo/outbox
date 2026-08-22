@@ -1,5 +1,5 @@
 //! [`Processor`] is the worker that executes the work loop at every interval:
-//! With a state of [`Pending`] or [`Failed`] it fetches a batch of messages with  
+//! With a state of [`Pending`] or [`Failed`] it fetches a batch of messages with
 //! the respective status, attempts to publish them, and update the messages' status
 //! based on the result of attempt.
 //!
@@ -9,11 +9,11 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 use futures::StreamExt;
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 use crate::config::OutboxConfig;
 use crate::error::OutboxError;
-use crate::model::{Message, MessageStatus};
+use crate::model::{Message, MessageStatus, PublishOutcome};
 use crate::publisher::Publisher;
 use crate::repository::Repository;
 
@@ -62,36 +62,51 @@ where
         futures::stream::iter(messages)
             .for_each_concurrent(count, |message| async move {
                 let id = message.id().clone();
-                
-                #[cfg(feature = "metrics")] 
-                let start = std::time::Instant::now();
-                #[cfg(feature = "metrics")] 
                 let subject = message.subject().to_owned();
+
+                let lease = match message.lease_token() {
+                    Some(token) => token.to_owned(),
+                    None => {
+                        error!(%id, %subject, "Claimed message has no lease token; skipping to avoid an un-fenceable publish (row will be recovered)");
+                        return;
+                    }
+                };
+
+                #[cfg(feature = "metrics")]
+                let start = std::time::Instant::now();
                 match self.publisher.publish(message).await {
                     Ok(()) => {
-                        debug!("Message successfully published");
+                        debug!(%id, %subject, "Message successfully published");
                         let result = self
                             .repository
-                            .update_status(id, MessageStatus::PUBLISHED, None)
+                            .update_status_by_outcome(id.clone(), lease,PublishOutcome::Published)
                             .await;
 
-                        #[cfg(feature = "metrics")] 
+                        #[cfg(feature = "metrics")]
                         let elapsed = start.elapsed().as_secs_f64();
 
                         match result {
-                            Ok(_) => {
+                            Ok(true) => {
                                 debug!("Message status updated to PUBLISHED");
-                                #[cfg(feature = "metrics")] 
+                                #[cfg(feature = "metrics")]
                                 {
-                                    metrics::counter!("outbox.published_total", "subject" => subject.clone()).increment(1); 
+                                    metrics::counter!("outbox.published_total", "subject" => subject.clone()).increment(1);
                                     metrics::histogram!("outbox.publish_duration_in_secs", "subject" => subject).record(elapsed);
+                                };
+                            }
+                            Ok(false) => {
+                                warn!(%id, %subject, "Published to message broker but the lease was lost before marking PUBLISHED; row will be reprocessed (dedup handles it)");
+                                #[cfg(feature = "metrics")]
+                                {
+                                    metrics::counter!("outbox.failed_to_update_after_publish_total", "subject" => subject.clone()).increment(1);
+                                    metrics::histogram!("outbox.failed_to_update_after_publish_duration_in_secs", "subject" => subject.clone()).record(elapsed);
                                 };
                             }
                             Err(err) => {
                                 error!("Message status not updated: {:?}", err);
-                                #[cfg(feature = "metrics")] 
+                                #[cfg(feature = "metrics")]
                                 {
-                                    metrics::counter!("outbox.failed_to_update_after_publish_total", "subject" => subject.clone()).increment(1); 
+                                    metrics::counter!("outbox.failed_to_update_after_publish_total", "subject" => subject.clone()).increment(1);
                                     metrics::histogram!("outbox.failed_to_update_after_publish_duration_in_secs", "subject" => subject).record(elapsed);
                                 };
                             },
@@ -99,21 +114,22 @@ where
                     }
                     Err(err) => {
                         error!("Failed to publish message {:?}", err);
-                        #[cfg(feature = "metrics")] 
+                        #[cfg(feature = "metrics")]
                         {
                             let elapsed = start.elapsed().as_secs_f64();
-                            metrics::counter!("outbox.failed_to_publish_total", "subject" => subject.clone()).increment(1); 
-                            metrics::histogram!("outbox.failed_to_publish_duration_in_secs", "subject" => subject).record(elapsed);
+                            metrics::counter!("outbox.failed_to_publish_total", "subject" => subject.clone()).increment(1);
+                            metrics::histogram!("outbox.failed_to_publish_duration_in_secs", "subject" => subject.clone()).record(elapsed);
                         };
 
                         let result = self
                             .repository
-                            .update_status(id, MessageStatus::FAILED, Some(err.to_string()))
+                            .update_status_by_outcome(id.clone(), lease, PublishOutcome::Failed(err.to_string()))
                             .await;
 
                         match result {
-                            Ok(_) => debug!("Message status updated to FAILED"),
-                            Err(err) => error!("Message status not updated: {:?}", err),
+                            Ok(true) => debug!(%id, %subject, "Message status updated to FAILED"),
+                            Ok(false) => warn!(%id, %subject, "Lease was lost before marking FAILED; row was reset or reclaimed and will be reprocessed."),
+                            Err(err) => error!(%id, %subject, error = ?err, "Failed to update message status to FAILED"),
                         }
                     }
                 }
@@ -137,7 +153,11 @@ where
     pub async fn process(&self) -> Result<usize, OutboxError> {
         let messages = self
             .repository
-            .fetch_and_claim(MessageStatus::PENDING, self.config.repository_batch_size)
+            .fetch_next_to_process_by_status(
+                MessageStatus::Pending,
+                self.config.repository_batch_size,
+                self.config.max_publish_attempts,
+            )
             .await?;
         if messages.is_empty() {
             debug!("No PENDING messages to publish");
@@ -174,8 +194,9 @@ where
                     recovered
                 );
 
-                #[cfg(feature = "metrics")] 
-                metrics::counter!("outbox.events_reverted_from_processing_to_pending_total").increment(recovered); 
+                #[cfg(feature = "metrics")]
+                metrics::counter!("outbox.events_reverted_from_processing_to_pending_total")
+                    .increment(recovered);
             }
             Ok(_) => {
                 debug!("No stale messages");
@@ -187,7 +208,11 @@ where
 
         let messages = self
             .repository
-            .fetch_and_claim(MessageStatus::FAILED, self.config.repository_batch_size)
+            .fetch_next_to_process_by_status(
+                MessageStatus::Failed,
+                self.config.repository_batch_size,
+                self.config.max_publish_attempts,
+            )
             .await?;
         if messages.is_empty() {
             debug!("No FAILED messages to publish");
@@ -211,12 +236,26 @@ where
     /// Fetches the messages that have reached the `retention_in_days` defined in the
     /// [`OutboxConfig`](crate::config::OutboxConfig)
     pub async fn process(&self) -> Result<(), OutboxError> {
-        #[cfg(feature = "metrics")] 
+        #[cfg(feature = "metrics")]
         let start = std::time::Instant::now();
 
-        self.repository
-            .clean_up(self.config.retention_in_days)
+        let deleted = self
+            .repository
+            .clean_up(
+                self.config.retention_in_secs,
+                self.config.clean_up_batch_size,
+            )
             .await?;
+
+        if deleted >= self.config.clean_up_batch_size as u64 {
+            warn!(
+                deleted,
+                batch_size = self.config.clean_up_batch_size,
+                "Cleanup hit the batch limit; expired messages likely remain for the next interval"
+            )
+        } else if deleted > 0 {
+            info!(deleted, "Deleted published messages past retention.");
+        }
 
         #[cfg(feature = "metrics")]
         {

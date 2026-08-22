@@ -10,10 +10,24 @@ use async_nats::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::fmt::Debug;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 const MESSAGE_ID: &str = "Nats-Msg-Id";
 const ACK_TOOK_TOO_LONG: &str = "Acknowledgment took too long";
+
+/// Awaits the `ack_future` for up to `ack_timeout`.
+///
+/// # Arguments
+/// `ack_timeout` The timeout for the future. When the duration reaches this value, returns an Err
+/// `ack_future` The future to wait on
+async fn await_ack_within<F>(ack_timeout: Duration, ack_future: F) -> Result<F::Output, OutboxError>
+where
+    F: IntoFuture,
+{
+    tokio::time::timeout(ack_timeout, ack_future)
+        .await
+        .map_err(|_| OutboxError::PublisherError(ACK_TOOK_TOO_LONG.into()))
+}
 
 pub struct NATSPublisher<Msg, Identifier> {
     client: Client,
@@ -38,24 +52,36 @@ where
     }
 
     async fn publish_and_await_ack(&self, message: Msg) -> Result<(), OutboxError> {
+        let id = message.id().to_string();
+        let subject = message.subject().to_string();
         let headers = {
             let mut headers = HeaderMap::new();
             headers.insert(MESSAGE_ID, message.id().to_string());
             headers
         };
 
-        let json_bytes = serde_json::to_vec(message.payload()).unwrap();
+        let json_bytes = serde_json::to_vec(message.payload())
+            .map_err(|e| OutboxError::PublisherError(e.to_string()))?;
         let bytes = Bytes::from(json_bytes);
 
         let ack_future: PublishAckFuture = self
             .jetstream
-            .publish_with_headers(message.subject().to_string(), headers, bytes)
+            .publish_with_headers(subject.clone(), headers, bytes)
             .await
             .map_err(|e| OutboxError::PublisherError(e.kind().to_string()))?;
-        let _ack: PublishAck = tokio::time::timeout(self.ack_timeout, ack_future)
-            .await
-            .map_err(|_| OutboxError::PublisherError(ACK_TOOK_TOO_LONG.into()))?
+        let ack: PublishAck = await_ack_within(self.ack_timeout, ack_future)
+            .await?
             .map_err(|e| OutboxError::PublisherError(e.kind().to_string()))?;
+
+        if ack.duplicate {
+            warn!(
+                %id,
+                %subject,
+                "JetStream reported a duplicate publish; message was re-sent after a prior publish whose status update did not persist"
+            );
+            #[cfg(feature = "metrics")]
+            metrics::counter!("outbox.duplicate_publish_total", "subject" => subject).increment(1);
+        }
         Ok(())
     }
 }
@@ -100,7 +126,7 @@ mod tests {
     use crate::{
         error::OutboxError,
         model::{Message, MessageStatus},
-        nats::{ACK_TOOK_TOO_LONG, NATSPublisher},
+        nats::{ACK_TOOK_TOO_LONG, NATSPublisher, await_ack_within},
         publisher::Publisher,
     };
 
@@ -127,6 +153,10 @@ mod tests {
 
         fn payload(&self) -> &serde_json::Value {
             &self.payload
+        }
+
+        fn lease_token(&self) -> Option<&str> {
+            None
         }
 
         fn name() -> &'static str {
@@ -170,6 +200,18 @@ mod tests {
                 .output()
                 .expect("failed to stop testcontainer");
         }
+    }
+
+    #[tokio::test]
+    async fn test_await_ack_within_ack_took_too_long() {
+        let never_acks = std::future::pending::<()>();
+
+        let result = await_ack_within(Duration::from_millis(1), never_acks).await;
+
+        assert_matches!(
+            result.unwrap_err(),
+            OutboxError::PublisherError(error) if error == ACK_TOOK_TOO_LONG
+        );
     }
 
     #[tokio::test]
@@ -229,7 +271,7 @@ mod tests {
 
         let message = TestMessage {
             id: Uuid::now_v7(),
-            status: MessageStatus::PENDING,
+            status: MessageStatus::Pending,
             subject: subject.to_string(),
             payload: serde_json::json!({
                 "id": "test",
@@ -247,7 +289,7 @@ mod tests {
 
         let message = TestMessage {
             id: Uuid::now_v7(),
-            status: MessageStatus::PENDING,
+            status: MessageStatus::Pending,
             subject: subject.to_string(),
             payload: serde_json::json!({
                 "id": "test2",
@@ -264,7 +306,7 @@ mod tests {
 
         let message = TestMessage {
             id: Uuid::now_v7(),
-            status: MessageStatus::PENDING,
+            status: MessageStatus::Pending,
             subject: subject.to_string(),
             payload: serde_json::json!({
                 "id": "test3",
@@ -273,23 +315,5 @@ mod tests {
         };
         let result = publisher.publish(message).await;
         assert_matches!(result.unwrap_err(), OutboxError::PublisherError(_));
-
-        let message = TestMessage {
-            id: Uuid::now_v7(),
-            status: MessageStatus::PENDING,
-            subject: subject.to_string(),
-            payload: serde_json::json!({
-                "id": "test4",
-                "aggregate_type": "user"
-            }),
-        };
-
-        let induce_ack_fail_publisher: NATSPublisher<TestMessage, Uuid> =
-            NATSPublisher::new(client.clone(), Duration::from_nanos(1))
-                .await
-                .unwrap();
-
-        let result = induce_ack_fail_publisher.publish(message).await;
-        assert_matches!(result.unwrap_err(), OutboxError::PublisherError(error) if error == ACK_TOOK_TOO_LONG);
     }
 }
