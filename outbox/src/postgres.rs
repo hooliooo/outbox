@@ -1,4 +1,4 @@
-//! The [`SqlxRespository`] is an implementation of the trait [`Repository`](crate::repository::Repository) that uses the sqlx crate
+//! The [`SqlxRepository`] is an implementation of the trait [`Repository`] that uses the sqlx crate
 //!
 use std::{
     fmt::{Debug, Display},
@@ -18,7 +18,7 @@ use crate::{
     repository::Repository,
 };
 
-/// A sqlx implemenation of the [`Repository`](outbox_core::repository::Repository)
+/// A sqlx implemenation of the [`Repository`]
 pub struct SqlxRepository<Msg, Identifier> {
     pool: PgPool,
     _marker: PhantomData<(Msg, Identifier)>,

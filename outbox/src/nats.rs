@@ -1,4 +1,4 @@
-//! [`NATSPublisher`] is an implemntation of the [`Publisher`](crate::publisher::Publisher) that uses the async-nats crate
+//! [`NATSPublisher`] is an implemntation of the [`Publisher`] that uses the async-nats crate
 //!
 use std::{fmt::Display, hash::Hash, marker::PhantomData, time::Duration};
 

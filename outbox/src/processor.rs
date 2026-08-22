@@ -1,7 +1,15 @@
 //! [`Processor`] is the worker that executes the work loop at every interval:
-//! With a state of [`Pending`] or [`Failed`] it fetches a batch of messages with
-//! the respective status, attempts to publish them, and update the messages' status
-//! based on the result of attempt.
+//! It operates in three typestates: [`Pending`], [`Failed`], and [`CleanUp`].
+//!
+//! The [`Pending`] [`Processor`] fetches a batch of messages with the status of [`MessageStatus::Pending`] and attempts to
+//! publish them.
+//!
+//! The [`Failed`] [`Processor`] resets messages that have been set to [`MessageStatus::Processing`] longer
+//! than the [`OutboxConfig::stale_threshold_in_secs`] and fetches a batch of messages with the
+//! status of [`MessageStatus::Failed`] and attempts to publish them.
+//!
+//! The [`CleanUp`] [`Processor`] deletes messages that have been set to [`MessageStatus::Published`]
+//! and is older than the [`OutboxConfig::retention_in_secs`]
 //!
 
 use std::fmt::{Debug, Display};
@@ -17,9 +25,7 @@ use crate::model::{Message, MessageStatus, PublishOutcome};
 use crate::publisher::Publisher;
 use crate::repository::Repository;
 
-/// Reads messages from the [`Repository`](crate::repository::Repository) and
-/// publishes the messages to the message queue.
-///
+/// Reads messages from the [`Repository`] and publishes the messages to the message queue.
 pub struct Processor<State, R, E, Id, P> {
     config: OutboxConfig,
     repository: R,
@@ -27,14 +33,11 @@ pub struct Processor<State, R, E, Id, P> {
     _marker: PhantomData<(State, E, Id)>,
 }
 
-/// State for the [`Processor`](crate::processor::Processor) to read and act
-/// on pending messages
+/// State for the [`Processor`] to read and act on pending messages
 pub struct Pending;
-/// State for the [`Processor`](crate::processor::Processor) to read and act
-/// on failed messages
+/// State for the [`Processor`] to read and act on failed messages
 pub struct Failed;
-/// State for the [`Processor`](crate::processor::Processor) to read and act
-/// messages that have reached their retention limit
+/// State for the [`Processor`] to read and act messages that have reached their retention limit
 pub struct CleanUp;
 
 impl<State, R, OutboxMessage, Identifier, P> Processor<State, R, OutboxMessage, Identifier, P>
@@ -147,9 +150,7 @@ where
 {
     /// Processes a batch of pending events.
     ///
-    /// Fetches and claims up to `repository_batch_size` PENDING messages via
-    /// [`Repository::fetch_and_claim`](crate::repository::Repository::fetch_and_claim),
-    /// then publishes them.
+    /// Fetches and claims up to `repository_batch_size` PENDING messages via [`Repository::fetch_next_to_process_by_status`], then publishes them.
     pub async fn process(&self) -> Result<usize, OutboxError> {
         let messages = self
             .repository
@@ -233,8 +234,7 @@ where
 {
     /// Processes a batch of events that have reached the retention period.
     ///
-    /// Fetches the messages that have reached the `retention_in_days` defined in the
-    /// [`OutboxConfig`](crate::config::OutboxConfig)
+    /// Fetches the messages that have reached the `retention_in_days` defined in the [`OutboxConfig`]
     pub async fn process(&self) -> Result<(), OutboxError> {
         #[cfg(feature = "metrics")]
         let start = std::time::Instant::now();

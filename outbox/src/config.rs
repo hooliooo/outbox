@@ -1,5 +1,5 @@
 //! Runtime configuration for the outbox
-//! [`OutboxConfig`] carries the options of the outbox functionality
+//! [`OutboxConfig`] carries the configuration of the outbox processor's functionality
 //!
 
 /// Runtime configuration for the outbox

@@ -1,5 +1,6 @@
 //! A [`Repository`] is the abstraction over the persistence layer used to store and read
 //! outbox messages.
+//!
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 
@@ -19,7 +20,7 @@ where
     ///
     /// Implementations are expected to lock the rows it fetches (e.g. `SELECT … FOR UPDATE SKIP LOCKED`
     /// in PostgreSQL) so concurrent workers cannot fetch the same rows and are expected to atomically
-    /// switch the status to [`MessageStatus::PROCESSING`]
+    /// switch the status to [`MessageStatus::Processing`]
     ///
     /// # Arguments
     /// - `status` The status of the messages to fetch
@@ -35,19 +36,17 @@ where
         max_publish_attempts: u32,
     ) -> Result<Vec<OutboxMessage>, OutboxError>;
 
-    /// Resets messages that have been stuck in
-    /// [`MessageStatus::PROCESSING`](crate::model::MessageStatus) longer than
-    /// `stale_threshold_in_secs` back to [`MessageStatus::PENDING`](crate::model::MessageStatus)
-    /// so they can be retried.
+    /// Resets messages that have been stuck in [`MessageStatus::Processing`] longer than [`OutboxConfig::stale_threshold_in_secs`]
+    /// back to [`MessageStatus::Pending`](crate::model::MessageStatus) so they can be retried.
     ///
     /// Returns the number of messages recovered.
     ///
     /// # Arguments
-    /// - `stale_threshold_in_secs` How long a message may remain in PROCESSING before recovery
+    /// - `stale_threshold_in_secs` How long a message may remain in [`MessageStatus::Processing`] before being reset
     async fn recover_stale(&self, stale_threshold_in_secs: u32) -> Result<u64, OutboxError>;
 
     /// Removes outbox messages with a status of
-    /// [`MessageStatus::PUBLISHED`](crate::model::MessageStatus) and older than the retention period
+    /// [`MessageStatus::Published`](crate::model::MessageStatus) and older than the retention period
     /// # Arguments
     /// - `retention_in_secs` The number of seconds published outbox messages are retained
     async fn clean_up(&self, retention_in_secs: u32, limit: u32) -> Result<u64, OutboxError>;
